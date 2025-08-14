@@ -1,4 +1,3 @@
-done
 #!/bin/bash
 
 # Fail on error, undef vars, and fail pipelines; make globs return empty when no match

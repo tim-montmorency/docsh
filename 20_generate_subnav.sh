@@ -7,7 +7,7 @@ shopt -s nullglob
 ## <!-- start-replace-subnav -->
 ## <!-- end-replace-subnav -->
 
-EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "docsh")
+EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "./docsh" "/docsh/tools")
 
 # Use current working directory as root by default. You can pass a different root as the
 # first argument when calling the script if needed.

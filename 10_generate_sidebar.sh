@@ -4,7 +4,7 @@
 set -euo pipefail
 shopt -s nullglob
 
-EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "docsh")
+EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "./docsh")
 SIDEBAR_FILE="_sidebar.md"
 
 # Function to extract the title from README.md
