@@ -83,7 +83,11 @@ generate_subnav_content() {
         fi
     done
 
-    printf "%s\n" "${content_lines[@]}"
+    if [[ ${#content_lines[@]} -gt 0 ]]; then
+        printf "%s\n" "${content_lines[@]}"
+    else
+        printf ""
+    fi
 }
 
 # Replaces content between <!-- start-replace-subnav --> and <!-- end-replace-subnav --> with new content
