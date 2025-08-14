@@ -4,8 +4,14 @@
 set -euo pipefail
 shopt -s nullglob
 
-EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "./docsh")
-SIDEBAR_FILE="_sidebar.md"
+# Calculate script and repository root paths so the sidebar is generated for the repo root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Directories (basenames) to exclude when walking
+EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "docsh")
+# Write sidebar to the repository root
+SIDEBAR_FILE="$REPO_ROOT/_sidebar.md"
 
 # Function to extract the title from README.md
 get_title_from_readme() {
@@ -15,8 +21,8 @@ get_title_from_readme() {
     echo "$title"
 }
 
-# Start writing to _sidebar.md
-> "$SIDEBAR_FILE"  # Clear the file
+# Start writing to _sidebar.md (clear)
+> "$SIDEBAR_FILE"
 
 # Function to walk through directories and generate the sidebar
 generate_sidebar() {
@@ -30,13 +36,25 @@ generate_sidebar() {
         if [[ -z "$title" ]]; then
             title=$(basename "$dir_path")
         fi
-        # Remove any double slashes from the path and add leading slash for absolute path
-        local clean_path
-        clean_path=$(echo "$dir_path/" | sed 's://:/:g')
-        clean_path="/${clean_path}"  # Add leading slash for absolute path
 
-        echo "$indent* [$title]($clean_path)" >> "$SIDEBAR_FILE"
-        echo "Added: $clean_path with title '$title'"
+        # Compute path relative to repo root and ensure it starts with a single '/'
+        local rel_path
+        rel_path="${dir_path#$REPO_ROOT}"
+        # Remove any leading slash that remains after prefix removal
+        rel_path="${rel_path#/}"
+        # Trim trailing slash
+        rel_path="${rel_path%/}"
+        if [[ -z "$rel_path" ]]; then
+            rel_path="/"
+        else
+            rel_path="/$rel_path/"
+        fi
+
+    # Collapse any accidental multiple slashes into a single slash (use sed)
+    rel_path="$(printf '%s' "$rel_path" | sed -E 's:/{2,}:/:g')"
+
+        echo "$indent* [$title]($rel_path)" >> "$SIDEBAR_FILE"
+        echo "Added: $rel_path with title '$title'"
     else
         echo "Skipped directory (no README.md): $dir_path"
     fi
@@ -57,16 +75,7 @@ generate_sidebar() {
     done
 }
 
-# Start from the current directory
-for dir in */; do
-    if [[ -d "$dir" ]]; then
-        base_dir=$(basename "$dir")
-        if [[ ! " ${EXCLUDED_DIRS[*]} " =~ " ${base_dir} " ]]; then
-            generate_sidebar "$dir" ""
-        else
-            echo "Excluding directory from initial scan: $dir"
-        fi
-    fi
-done
+# Generate sidebar starting at the repository root (this includes the root README)
+generate_sidebar "$REPO_ROOT" ""
 
 echo "Sidebar generation complete: $SIDEBAR_FILE"

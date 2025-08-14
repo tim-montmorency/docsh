@@ -12,15 +12,7 @@ Principaux scripts
 - `10_generate_sidebar.sh` : génère un fichier `_sidebar.md` en se basant sur les titres
 	des `README.md` trouvés dans les sous-répertoires.
 - `20_generate_subnav.sh` : insère ou met à jour le contenu entre
-	`<!-- start-replace-subnav -->` et `<!-- end-replace-subnav -->` dans les `README.md`.
 
-	`<!-- start-replace-subnav -->` et `<!-- end-replace-subnav -->` dans les `README.md`.
-
-	`<!-- start-replace-subnav -->` et `<!-- end-replace-subnav -->` dans les `README.md`.
-
-	`<!-- start-replace-subnav -->` et `<!-- end-replace-subnav -->` dans les `README.md`.
-
-	`<!-- start-replace-subnav -->` et `<!-- end-replace-subnav -->` dans les `README.md`.
 - `30_generate_media.sh` : remplace le bloc entre
 	`<!-- start-replace-media ... -->` et `<!-- end-replace-media -->` par une liste d'images
 	provenant du dossier `medias/` du répertoire courant. Supporte l'option `no-caption`.
