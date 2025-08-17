@@ -7,16 +7,28 @@ shopt -s nullglob
 ## <!-- start-replace-subnav -->
 ## <!-- end-replace-subnav -->
 
-EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "./docsh" "/docsh/tools")
+# Excluded directory basenames
+EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "docsh" "tools")
 
-# Use current working directory as root by default. You can pass a different root as the
-# first argument when calling the script if needed.
-ROOT_DIR="${1:-$(pwd)}"
+# Default to the parent directory of this script (usually the repo root).
+# You can still override by passing a root as the first argument.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="${1:-$DEFAULT_ROOT}"
+
+echo "Generating subnavs for root: $ROOT_DIR"
 
 # Extracts title from the first line starting with '# ' in README.md
 get_title_from_readme() {
     local readme_path="$1"
-    grep -m 1 "^# " "$readme_path" | sed 's/^# //'
+    # Safely extract the first Markdown header (levels 1-6). If none, return empty.
+    local line
+    line=$(grep -m 1 -E '^#{1,6}[[:space:]]+' "$readme_path" || true)
+    if [[ -n "$line" ]]; then
+        echo "$line" | sed -E 's/^#{1,6}[[:space:]]+//'
+    else
+        printf ""
+    fi
 }
 
 # Recursively generates a list of subdirectories that contain README.md, formatted as markdown links
@@ -33,7 +45,15 @@ generate_subnav_content() {
             local base_dir
             base_dir=$(basename "$subdir")
 
-            if [[ " ${EXCLUDED_DIRS[*]} " =~ " ${base_dir} " ]]; then
+            # Skip excluded basenames
+            is_excluded=0
+            for ex in "${EXCLUDED_DIRS[@]}"; do
+                if [[ "$ex" == "$base_dir" ]]; then
+                    is_excluded=1
+                    break
+                fi
+            done
+            if [[ $is_excluded -eq 1 ]]; then
                 continue
             fi
 
@@ -165,7 +185,15 @@ generate_subnav() {
             subdir="${subdir%/}"
             local base_dir
             base_dir=$(basename "$subdir")
-            if [[ ! " ${EXCLUDED_DIRS[*]} " =~ " ${base_dir} " ]]; then
+            # Skip excluded basenames
+            is_excluded=0
+            for ex in "${EXCLUDED_DIRS[@]}"; do
+                if [[ "$ex" == "$base_dir" ]]; then
+                    is_excluded=1
+                    break
+                fi
+            done
+            if [[ $is_excluded -eq 0 ]]; then
                 generate_subnav "$subdir"
             fi
         fi
