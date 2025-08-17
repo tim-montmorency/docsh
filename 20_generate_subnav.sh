@@ -35,9 +35,18 @@ get_title_from_readme() {
 generate_subnav_content() {
     local parent_dir="$1"
     local indent_level="$2"
+    local max_depth="${3:-}"
     local content_lines=()
 
     parent_dir="${parent_dir%/}"
+
+    # If max_depth is numeric and we've reached it, stop recursion
+    if [[ -n "$max_depth" ]]; then
+        # ensure max_depth is numeric
+        if ! [[ "$max_depth" =~ ^[0-9]+$ ]]; then
+            max_depth=""
+        fi
+    fi
 
     for subdir in "$parent_dir"/*/; do
         if [[ -d "$subdir" ]]; then
@@ -95,7 +104,12 @@ generate_subnav_content() {
                 fi
 
                 local sub_content
-                sub_content=$(generate_subnav_content "$subdir" $((indent_level + 1)))
+                # Only recurse further if max_depth not set or indent_level+1 < max_depth
+                if [[ -z "$max_depth" || $((indent_level + 1)) -lt $max_depth ]]; then
+                    sub_content=$(generate_subnav_content "$subdir" $((indent_level + 1)) "$max_depth")
+                else
+                    sub_content=""
+                fi
                 if [[ -n "$sub_content" ]]; then
                     content_lines+=("$sub_content")
                 fi
@@ -115,12 +129,13 @@ replace_content_between_tags() {
     local readme_path="$1"
     local subnav_content="$2"
 
-    if grep -q "<!-- start-replace-subnav -->" "$readme_path" && grep -q "<!-- end-replace-subnav -->" "$readme_path"; then
+    # Match a start tag that may include optional parameters, e.g. <!-- start-replace-subnav depth=1 -->
+    if grep -q "<!-- start-replace-subnav" "$readme_path" && grep -q "<!-- end-replace-subnav -->" "$readme_path"; then
         echo "Processing $readme_path..."
 
-        # Find line numbers of the tags
+        # Find line numbers of the tags (start tag may include parameters)
         local start_line
-        start_line=$(grep -n "<!-- start-replace-subnav -->" "$readme_path" | cut -d: -f1 | head -n 1)
+        start_line=$(grep -n "<!-- start-replace-subnav" "$readme_path" | cut -d: -f1 | head -n 1)
         local end_line
         end_line=$(grep -n "<!-- end-replace-subnav -->" "$readme_path" | cut -d: -f1 | head -n 1)
 
@@ -163,8 +178,19 @@ generate_readme_in_subfolders() {
     title=$(get_title_from_readme "$readme_path")
     [[ -z "$title" ]] && title=$(basename "$parent_dir")
 
+    # Detect optional depth argument in the start tag: <!-- start-replace-subnav depth=N -->
+    local start_tag_line
+    start_tag_line=$(grep -n "<!-- start-replace-subnav" "$readme_path" | cut -d: -f2- | head -n1 || true)
+    local max_depth=""
+    if [[ -n "$start_tag_line" ]]; then
+        # extract depth=NUMBER
+        if [[ $start_tag_line =~ depth=([0-9]+) ]]; then
+            max_depth="${BASH_REMATCH[1]}"
+        fi
+    fi
+
     local subnav_content
-    subnav_content=$(generate_subnav_content "$parent_dir" 0)
+    subnav_content=$(generate_subnav_content "$parent_dir" 0 "$max_depth")
 
     replace_content_between_tags "$readme_path" "$subnav_content"
 }
