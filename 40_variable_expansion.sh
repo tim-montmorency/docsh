@@ -30,7 +30,7 @@ EOF
 VAR_FILE=.variable_expansion
 ROOT_DIR=.
 DRY_RUN=0
-VERBOSE=0
+VERBOSE=1
 
 # Space-separated excluded dirs
 EXCLUDED_DIRS=".git node_modules __pycache__ .vscode docsh tools"
@@ -46,26 +46,54 @@ while getopts "f:r:nvh" opt; do
 	esac
 done
 
-if [ ! -f "$VAR_FILE" ]; then
-	# Resolve script directory and try a few sensible fallbacks. This makes the
-	# script work when executed from inside docsh/ (autorun) while the
-	# .variable_expansion file lives in the repository root.
+	# Resolve script directory early so we can detect autorun (script executed from docsh/)
 	SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
-	if [ -f "../$VAR_FILE" ]; then
-		VAR_FILE="../$VAR_FILE"
-		[ "$VERBOSE" = "1" ] && printf "Using parent-dir variable file: %s\n" "$VAR_FILE"
-	elif [ -f "$SCRIPT_DIR/../$VAR_FILE" ]; then
-		VAR_FILE="$SCRIPT_DIR/../$VAR_FILE"
-		[ "$VERBOSE" = "1" ] && printf "Using script-parent variable file: %s\n" "$VAR_FILE"
-	elif [ -f "$SCRIPT_DIR/$VAR_FILE" ]; then
-		VAR_FILE="$SCRIPT_DIR/$VAR_FILE"
-		[ "$VERBOSE" = "1" ] && printf "Using script-dir variable file: %s\n" "$VAR_FILE"
-	else
-		echo "Variable file not found: $VAR_FILE (tried parent dir and script paths). Pass -f to specify." >&2
-		exit 2
+	if [ ! -f "$VAR_FILE" ]; then
+	# Resolve script directory for later comparisons and fallbacks.
+	SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+
+	# Try searching upward from the current working directory for the var file
+	# (covers autorun when we are inside docsh/ and the file lives in repo root).
+	VAR_BASENAME=$(basename "$VAR_FILE")
+	cur_dir=$(pwd)
+	found=0
+	while [ "$cur_dir" != "/" ]; do
+
+# If the script is invoked from inside the script directory (autorun cd's into docsh/),
+# default the ROOT_DIR to the script parent so we scan the repository root.
+if [ "$ROOT_DIR" = "." ]; then
+	if [ "$(pwd)" = "$SCRIPT_DIR" ]; then
+		ROOT_DIR=$(dirname "$SCRIPT_DIR")
+		[ "$VERBOSE" = "1" ] && printf "Autorun detected: adjusting root to %s\n" "$ROOT_DIR"
 	fi
 fi
+		if [ -f "$cur_dir/$VAR_BASENAME" ]; then
+			VAR_FILE="$cur_dir/$VAR_BASENAME"
+			found=1
+			[ "$VERBOSE" = "1" ] && printf "Found variable file while searching up: %s\n" "$VAR_FILE"
+			break
+		fi
+		cur_dir=$(dirname "$cur_dir")
+	done
+
+	if [ "$found" -ne 1 ]; then
+		# Try script-relative fallbacks (script parent and script dir)
+		if [ -f "$SCRIPT_DIR/../$VAR_BASENAME" ]; then
+			VAR_FILE="$SCRIPT_DIR/../$VAR_BASENAME"
+			[ "$VERBOSE" = "1" ] && printf "Using script-parent variable file: %s\n" "$VAR_FILE"
+		elif [ -f "$SCRIPT_DIR/$VAR_BASENAME" ]; then
+			VAR_FILE="$SCRIPT_DIR/$VAR_BASENAME"
+			[ "$VERBOSE" = "1" ] && printf "Using script-dir variable file: %s\n" "$VAR_FILE"
+		else
+			echo "Variable file not found: $VAR_FILE (searched upward and script paths). Pass -f to specify." >&2
+			exit 2
+		fi
+	fi
+fi
+
+# Compute an absolute path for VAR_FILE so we can reliably skip it when iterating
+ABS_VAR_FILE=$(cd "$(dirname "$VAR_FILE")" 2>/dev/null && pwd || echo "")/$(basename "$VAR_FILE")
 
 if [ "$VERBOSE" = "1" ]; then
 	echo "Using variable file: $VAR_FILE"
@@ -111,7 +139,7 @@ eval "$FIND_CMD" | while IFS= read -r file; do
 	fi
 
 	if [ "$DRY_RUN" = "1" ]; then
-		perl -0777 -e '
+			perl -0777 -e '
 			my $varfile = shift @ARGV;
 			open my $vh, "<", $varfile or die "Cannot open $varfile: $!";
 			my %v;
@@ -123,7 +151,7 @@ eval "$FIND_CMD" | while IFS= read -r file; do
 						if (exists $v{$key}){ $changed = 1; $open . $v{$key} . $close }
 						else { warn "Warning: key $key not defined (file: $file)\n"; $open . $old . $close }
 					}ges;
-			print STDOUT ($changed ? "CHANGED:$file\n" : "UNCHANGED:$file\n");
+			print STDOUT ($changed ? "UPDATED:$file\n" : "UNCHANGED:$file\n");
 		' "$VAR_FILE" "$file"
 	else
 		tmpfile="${file}.tmp.$$"
@@ -139,11 +167,22 @@ eval "$FIND_CMD" | while IFS= read -r file; do
 						else { warn "Warning: key $key not defined (file: $file)\n"; $open . $old . $close }
 					}ges;
 			print STDOUT $t;
-		' "$VAR_FILE" "$file" > "$tmpfile"
-		# Replace original file with tmp
-		if [ -f "$tmpfile" ]; then
-			mv "$tmpfile" "$file"
-		fi
+			' "$VAR_FILE" "$file" > "$tmpfile"
+			# Replace original file with tmp only if content changed; report when verbose
+			if [ -f "$tmpfile" ]; then
+				# If files are identical, remove tmp and report UNCHANGED when verbose
+				if cmp -s "$file" "$tmpfile" 2>/dev/null; then
+					rm -f "$tmpfile"
+					if [ "$VERBOSE" = "1" ]; then
+						printf "UNCHANGED:%s\n" "$file"
+					fi
+				else
+					mv "$tmpfile" "$file"
+					if [ "$VERBOSE" = "1" ]; then
+						printf "UPDATED:%s\n" "$file"
+					fi
+				fi
+			fi
 	fi
 done
 
