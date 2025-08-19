@@ -1,9 +1,20 @@
 #!/bin/sh
 # POSIX Markdown variable expansion:
-#   <!-- varexp:begin KEY -->...<!-- varexp:end -->
+#   <!-- %: KEY -->...<!-- %; -->
+#   Short form: <!-- %: KEY -->...<!-- %; -->
 # Supports:
-#   1) Inline:  "# TP1 <!-- varexp:begin K -->VAL<!-- varexp:end -->"
-#   2) Block:   "# TP1\n<!-- varexp:begin K -->\nVAL\n<!-- varexp:end -->"
+#   1) Inline:  "# TP1 <!-- %: K -->VAL<!-- %; -->" 
+# 			or "# TP1 <!-- %: K -->VAL<!-- %; -->"
+#   2) Block:
+#			# TP1
+#			<!-- %: K -->
+#			VAL
+#			<!-- %; -->
+# 			or 
+#			# TP1
+#			<!-- %: K -->
+#			VAL
+#			<!-- %; -->
 # Preserves original line ending style (LF/CRLF/CR).
 
 set -eu
@@ -172,11 +183,11 @@ while IFS= read -r file; do
 			# Pass 1: BLOCK style (begin/end on their own lines). Preserve indentation & newline style.
 			$t =~ s{
 				^([ \t]*)
-				(<!--\s*varexp:begin\s+([^\s>]+)\s*-->)
+				(<!--\s*(?:%:|%:)\s+([^\s>]+)\s*-->)
 				[ \t]*\R
 				(.*?)
 				^\1
-				(<!--\s*varexp:end\s*-->)
+				(<!--\s*(?:%;|%;)\s*-->)
 			}{
 				my ($indent,$open,$key,$body,$close) = ($1,$2,$3,$4,$5);
 				if (exists $v{$key}) {
@@ -190,9 +201,9 @@ while IFS= read -r file; do
 
 			# Pass 2: INLINE style (begin/end on the same line only).
 			$t =~ s{
-				(<!--\s*varexp:begin\s+([^\s>]+)\s*-->)
+				(<!--\s*(?:%:|%:)\s+([^\s>]+)\s*-->)
 				([^\r\n]*?)
-				(<!--\s*varexp:end\s*-->)
+				(<!--\s*(?:%;|%;)\s*-->)
 			}{
 				my ($open,$key,$body,$close) = ($1,$2,$3,$4);
 				if (exists $v{$key}) {
@@ -236,11 +247,11 @@ while IFS= read -r file; do
 			# Pass 1: BLOCK style
 			$t =~ s{
 				^([ \t]*)
-				(<!--\s*varexp:begin\s+([^\s>]+)\s*-->)
+				(<!--\s*(?:%:|%:)\s+([^\s>]+)\s*-->)
 				[ \t]*\R
 				(.*?)
 				^\1
-				(<!--\s*varexp:end\s*-->)
+				(<!--\s*(?:%;|%;)\s*-->)
 			}{
 				my ($indent,$open,$key,$body,$close) = ($1,$2,$3,$4,$5);
 				if (exists $v{$key}) {
@@ -253,9 +264,9 @@ while IFS= read -r file; do
 
 			# Pass 2: INLINE style (same line)
 			$t =~ s{
-				(<!--\s*varexp:begin\s+([^\s>]+)\s*-->)
+				(<!--\s*(?:%:|%:)\s+([^\s>]+)\s*-->)
 				([^\r\n]*?)
-				(<!--\s*varexp:end\s*-->)
+				(<!--\s*(?:%;|%;)\s*-->)
 			}{
 				my ($open,$key,$body,$close) = ($1,$2,$3,$4);
 				if (exists $v{$key}) {
