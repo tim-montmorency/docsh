@@ -36,6 +36,12 @@ generate_sidebar() {
     local dir_path="$1"
     local indent="$2"
 
+    # If a .docshignore file exists in this directory, skip it and its subtree
+    if [[ -f "$dir_path/.docshignore" ]]; then
+        echo "Skipping directory due to .docshignore: $dir_path"
+        return
+    fi
+
     # Check for README.md in the current directory
     if [[ -f "$dir_path/README.md" ]]; then
         local title
@@ -74,7 +80,12 @@ generate_sidebar() {
             base_dir=$(basename "$subdir")
             # Check if this directory should be excluded
             if [[ ! " ${EXCLUDED_DIRS[*]} " =~ " ${base_dir} " ]]; then
-                generate_sidebar "$subdir" "  $indent"
+                # Also skip if the subdir contains .docshignore
+                if [[ -f "$subdir/.docshignore" ]]; then
+                    echo "Skipping subdirectory due to .docshignore: $subdir"
+                else
+                    generate_sidebar "$subdir" "  $indent"
+                fi
             else
                 echo "Excluding directory from recursion: $subdir"
             fi
@@ -122,7 +133,12 @@ else
         if [[ -d "$top" ]]; then
             base_dir=$(basename "$top")
             if [[ ! " ${EXCLUDED_DIRS[*]} " =~ " ${base_dir} " ]]; then
-                generate_sidebar "$top" ""
+                # Skip top-level dirs that contain .docshignore
+                if [[ -f "$top/.docshignore" ]]; then
+                    echo "Skipping top-level directory due to .docshignore: $top"
+                else
+                    generate_sidebar "$top" ""
+                fi
             else
                 echo "Excluding top-level directory from scan: $top"
             fi
