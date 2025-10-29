@@ -89,8 +89,10 @@ if [ ! -f "$VAR_FILE" ]; then
 			VAR_FILE="$SCRIPT_DIR/$VAR_BASENAME"
 			[ "$VERBOSE" = "1" ] && printf "Using script-dir variable file: %s\n" "$VAR_FILE"
 		else
-			echo "Variable file not found: $VAR_FILE (searched upward and script paths). Pass -f to specify." >&2
-			exit 2
+			# Variable file missing — warn and skip processing so we don't modify files
+			# unexpectedly. Exit with status 0 to indicate graceful no-op.
+			printf "Warning: Variable file not found: %s (searched upward and script paths). Skipping processing.\n" "$VAR_FILE" >&2
+			exit 0
 		fi
 	fi
 fi
