@@ -36,9 +36,11 @@ generate_subnav_content() {
     local parent_dir="$1"
     local indent_level="$2"
     local max_depth="${3:-}"
+    local readme_dir="${4:-$parent_dir}"   # directory of the README being generated
     local content_lines=()
 
     parent_dir="${parent_dir%/}"
+    readme_dir="${readme_dir%/}"
 
     # If max_depth is numeric and we've reached it, stop recursion
     if [[ -n "$max_depth" ]]; then
@@ -89,16 +91,20 @@ generate_subnav_content() {
                 done
                 
                 # Check for cover image (_cover.png or _cover.jpg)
+                # Path is relative to the README being generated (readme_dir),
+                # so images resolve correctly regardless of nesting depth.
+                local img_rel="${subdir#$readme_dir/}"
+                img_rel="${img_rel%/}"
                 local cover_image=""
                 if [[ -f "$subdir/_cover.png" ]]; then
-                    cover_image="${base_dir}/_cover.png"
+                    cover_image="./${img_rel}/_cover.png"
                 elif [[ -f "$subdir/_cover.jpg" ]]; then
-                    cover_image="${base_dir}/_cover.jpg"
+                    cover_image="./${img_rel}/_cover.jpg"
                 fi
                 
                 # Create link with image if cover exists, otherwise text link
                 if [[ -n "$cover_image" ]]; then
-                    content_lines+=("${indent}* [![${subdir_title}](./${cover_image})](${link})")
+                    content_lines+=("${indent}* [![${subdir_title}](${cover_image})](${link})")
                 else
                     content_lines+=("${indent}* [${subdir_title}](${link})")
                 fi
@@ -106,7 +112,7 @@ generate_subnav_content() {
                 local sub_content
                 # Only recurse further if max_depth not set or indent_level+1 < max_depth
                 if [[ -z "$max_depth" || $((indent_level + 1)) -lt $max_depth ]]; then
-                    sub_content=$(generate_subnav_content "$subdir" $((indent_level + 1)) "$max_depth")
+                    sub_content=$(generate_subnav_content "$subdir" $((indent_level + 1)) "$max_depth" "$readme_dir")
                 else
                     sub_content=""
                 fi
