@@ -6,74 +6,223 @@ Français / French
 `docsh` est une petite collection de scripts Bash pour faciliter la génération et la maintenance
 de la documentation statique (par exemple pour Docsify). Les scripts parcourent l'arborescence
 du projet, génèrent un `_sidebar.md`, insèrent des sous-navigations dans les `README.md` et
-gèrent l'insertion d'éléments médias (images) depuis des dossiers `medias/`.
+gèrent l'insertion d'éléments médias et de listes de fichiers.
 
-Principaux scripts
-- `10_generate_sidebar.sh` : génère un fichier `_sidebar.md` en se basant sur les titres
-	des `README.md` trouvés dans les sous-répertoires.
-- `20_generate_subnav.sh` : insère ou met à jour le contenu entre
+Les scripts sont numérotés et s'exécutent dans cet ordre via `autorun.sh`.
 
-- `30_generate_media.sh` : remplace le bloc entre
-	`<!-- start-replace-media ... -->` et `<!-- end-replace-media -->` par une liste d'images
-	provenant du dossier `medias/` du répertoire courant. Supporte l'option `no-caption`.
-- `autorun.sh` : exécute les scripts présents dans le dossier `docsh` (sauf lui-même).
+### Scripts
 
-Usage rapide
+**`30_generate_media.sh`**
+Remplace le bloc entre `<!-- start-replace-media ... -->` et `<!-- end-replace-media -->` par
+une liste d'images issues du dossier `medias/` du répertoire courant.
+Option `no-caption` : utilise un espace comme texte alternatif (pas de légende).
 
-Exécuter tous les scripts (depuis la racine du dépôt) :
-
-```bash
-bash ./autorun.sh
+```markdown
+<!-- start-replace-media -->
+* ![Mon Image](./medias/mon-image.jpg)
+<!-- end-replace-media -->
 ```
 
-Ou exécuter un script individuellement :
+---
 
-```bash
-bash ./10_generate_sidebar.sh
+**`35_generate_filelist.sh`**
+Remplace le bloc entre `<!-- start-replace-filelist ... -->` et `<!-- end-replace-filelist -->`
+par une liste de liens Markdown.
+
+Comportement par défaut (sans arguments) : liste tout le contenu non-caché du dossier du
+`README.md` (fichiers **et** sous-dossiers), en excluant `README.md` lui-même. Les titres
+des sous-dossiers sont lus depuis leur propre `README.md`. Cela crée une navigation augmentée
+et un inventaire de fichiers en un seul bloc.
+
+Paramètres du tag :
+- `folder="./chemin"` — dossier à scanner (défaut : dossier du `README.md`)
+- `pattern="regex"` — filtre les noms de fichiers par expression régulière (défaut : tout)
+- `recursive` *(flag)* — inclut les sous-dossiers
+- `raw` *(flag)* — noms bruts sans mise en forme Title Case
+
+```markdown
+<!-- start-replace-filelist -->
+- [Module 2020 Box Corner](./modules/2020-box-corner/)
+- [Schema.pdf](./doc/schema.pdf)
+<!-- end-replace-filelist -->
+
+<!-- start-replace-filelist folder="./export" pattern="\.stl$" -->
+- [Boite Extrusion EnsembleBody Bottom](./export/boite-extrusion-ensembleBody-bottom.stl)
+<!-- end-replace-filelist -->
 ```
 
-Bonnes pratiques
-- Exécuter depuis la racine du dépôt pour que les chemins relatifs fonctionnent correctement.
-- Rendre les scripts exécutables si vous préférez `./script.sh` : `chmod +x script.sh`.
-- Installer `shellcheck` et `shfmt` si vous voulez vérifier et formater les scripts Bash.
+---
+
+**`40_variable_expansion.sh`**
+Remplace les variables inline ou blocs entre `<!-- %: CLE -->` et `<!-- %; -->` par leur valeur
+définie dans un fichier `.variable_expansion` à la racine du dépôt.
+
+Options CLI : `-f VARFILE`, `-r ROOT`, `-n` (dry-run), `-v` (verbose).
+
+```markdown
+Version : <!-- %: VERSION -->1.0<!-- %; -->
+```
+
+---
+
+**`60_generate_subnav.sh`**
+Insère ou met à jour une sous-navigation (liste de liens vers les sous-dossiers) entre les tags
+`<!-- start-replace-subnav -->` et `<!-- end-replace-subnav -->` dans chaque `README.md`.
+Supporte une image de couverture `_cover.png` / `_cover.jpg` dans les sous-dossiers.
+Option `depth=N` dans le tag de début pour limiter la profondeur de récursion.
+
+```markdown
+<!-- start-replace-subnav depth=1 -->
+* [Sous-section](./sous-section/)
+<!-- end-replace-subnav -->
+```
+
+---
+
+**`70_generate_sidebar.sh`**
+Génère le fichier `_sidebar.md` à la racine du dépôt en parcourant tous les `README.md`.
+Un fichier `.docshignore` dans un dossier exclut ce dossier et ses enfants.
+
+Options CLI :
+- `-r`, `--include-root` — inclut le `README.md` racine comme entrée de premier niveau
+- `-h`, `--help` — aide
+
+---
+
+**`autorun.sh`**
+Exécute tous les scripts `.sh` du dossier `docsh` dans l'ordre alphabétique/numérique,
+sauf lui-même.
+
+---
+
+### Usage rapide
+
+Exécuter tous les scripts depuis la racine du dépôt :
+
+```bash
+bash docsh/autorun.sh
+```
+
+Exécuter un script individuellement :
+
+```bash
+bash docsh/70_generate_sidebar.sh --include-root
+```
+
+### Bonnes pratiques
+
+- Exécuter depuis la racine du dépôt pour que les chemins relatifs fonctionnent.
+- Rendre les scripts exécutables si besoin : `chmod +x docsh/*.sh`.
+- Utiliser `.docshignore` pour exclure un dossier de la sidebar et de la subnav.
 
 English / Anglais
 ------------------
 
 `docsh` is a small collection of Bash scripts to help generate and maintain static
-documentation (for example, Docsify). The scripts walk the project tree, generate a
-`_sidebar.md`, inject sub-navigation blocks into `README.md` files, and manage media
-insertion (images) from `medias/` folders.
+documentation (for example, Docsify). Scripts are numbered and run in order via `autorun.sh`.
 
-Main scripts
-- `10_generate_sidebar.sh`: generates a `_sidebar.md` file based on the `#` titles found
-	in `README.md` files under subdirectories.
-- `20_generate_subnav.sh`: inserts or updates the content between
+### Scripts
 
-- `30_generate_media.sh`: replaces the block between
-	`<!-- start-replace-media ... -->` and `<!-- end-replace-media -->` with a list of images
-	found in the directory's `medias/` folder. Supports a `no-caption` mode.
-- `autorun.sh`: runs all scripts in the `docsh` folder (skips itself).
+**`30_generate_media.sh`**
+Replaces the block between `<!-- start-replace-media ... -->` and `<!-- end-replace-media -->`
+with a list of images found in the directory's `medias/` folder.
+`no-caption` flag: uses a space as alt text (no visible caption).
 
-Quick start
+```markdown
+<!-- start-replace-media -->
+* ![My Image](./medias/my-image.jpg)
+<!-- end-replace-media -->
+```
+
+---
+
+**`35_generate_filelist.sh`**
+Replaces the block between `<!-- start-replace-filelist ... -->` and `<!-- end-replace-filelist -->`
+with a Markdown link list.
+
+Default behaviour (no arguments): lists all non-hidden contents of the README's own directory
+(files **and** subdirectories), excluding `README.md` itself. Subdirectory titles are read from
+their own `README.md`. This produces an augmented navigation + file inventory in one block.
+
+Tag parameters:
+- `folder="./path"` — folder to scan (default: directory of the `README.md`)
+- `pattern="regex"` — filter filenames by regex (default: list everything)
+- `recursive` *(flag)* — include subdirectories
+- `raw` *(flag)* — use bare filenames instead of Title Case link text
+
+```markdown
+<!-- start-replace-filelist -->
+- [Module 2020 Box Corner](./modules/2020-box-corner/)
+- [Schema.pdf](./doc/schema.pdf)
+<!-- end-replace-filelist -->
+
+<!-- start-replace-filelist folder="./export" pattern="\.stl$" -->
+- [Boite Extrusion EnsembleBody Bottom](./export/boite-extrusion-ensembleBody-bottom.stl)
+<!-- end-replace-filelist -->
+```
+
+---
+
+**`40_variable_expansion.sh`**
+Replaces inline or block variables between `<!-- %: KEY -->` and `<!-- %; -->` with values
+defined in a `.variable_expansion` file at the repository root.
+
+CLI options: `-f VARFILE`, `-r ROOT`, `-n` (dry-run), `-v` (verbose).
+
+```markdown
+Version: <!-- %: VERSION -->1.0<!-- %; -->
+```
+
+---
+
+**`60_generate_subnav.sh`**
+Inserts or updates a sub-navigation (links to subdirectories) between
+`<!-- start-replace-subnav -->` and `<!-- end-replace-subnav -->` in each `README.md`.
+Supports a `_cover.png` / `_cover.jpg` cover image in subdirectories.
+Add `depth=N` in the start tag to limit recursion depth.
+
+```markdown
+<!-- start-replace-subnav depth=1 -->
+* [Sub-section](./sub-section/)
+<!-- end-replace-subnav -->
+```
+
+---
+
+**`70_generate_sidebar.sh`**
+Generates `_sidebar.md` at the repository root by walking all `README.md` files.
+A `.docshignore` file in a directory excludes that directory and its children.
+
+CLI options:
+- `-r`, `--include-root` — include the root `README.md` as the top-level entry
+- `-h`, `--help` — show help
+
+---
+
+**`autorun.sh`**
+Runs all `.sh` scripts in the `docsh` folder in alphabetical/numeric order, skipping itself.
+
+---
+
+### Quick start
 
 Run all scripts from the repository root:
 
 ```bash
-bash ./autorun.sh
+bash docsh/autorun.sh
 ```
 
-Or run a single script:
+Run a single script:
 
 ```bash
-bash ./10_generate_sidebar.sh
+bash docsh/70_generate_sidebar.sh --include-root
 ```
 
-Notes & Improvements
-- Prefer running from the repository root so relative paths behave as expected.
-- Consider adding `set -euo pipefail` and `shopt -s nullglob` to the scripts for
-	more robust error handling, and use `find -print0` for filenames with spaces.
-- Adding a GitHub Actions workflow to run `shellcheck` is recommended.
+### Notes
+
+- Run from the repository root so relative paths behave as expected.
+- Make scripts executable if preferred: `chmod +x docsh/*.sh`.
+- Use `.docshignore` to exclude a directory from the sidebar and subnav.
 
 License
 -------
