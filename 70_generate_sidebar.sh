@@ -84,11 +84,15 @@ get_title() {
 }
 
 # should_skip README  →  returns 0 (true) when the entry must be excluded
-# Rule: frontpage: 0  →  skip.
+# Rules:
+#   frontpage: 0  →  skip
+#   hidden: 1     →  skip
 should_skip() {
-    local fp
+    local fp hid
     fp=$(get_fm_value "$1" "frontpage")
-    [[ "$fp" == "0" ]]
+    [[ "$fp" == "0" ]] && return 0
+    hid=$(get_fm_value "$1" "hidden")
+    [[ "$hid" == "1" ]]
 }
 
 # dir_link DIR_PATH  →  "/repo-relative/path/"
