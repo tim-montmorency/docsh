@@ -21,6 +21,21 @@ get_title_from_readme() {
     echo "$title"
 }
 
+# Extract a YAML frontmatter value by key from a file
+get_fm_value() {
+    local file="$1" key="$2"
+    awk '/^---/{if(s)exit;s=1;next} s && /^---/{exit} s{print}' "$file" \
+        | grep -m1 "^${key}:" | sed -e "s/^${key}:[[:space:]]*//" -e "s/[[:space:]]*$//"
+}
+
+# Return true (exit 0) if this README should be excluded from the sidebar
+should_skip() {
+    local readme="$1"
+    local fp
+    fp=$(get_fm_value "$readme" "frontpage")
+    [[ "$fp" == "0" || "$fp" == "false" ]]
+}
+
 # Start writing to _sidebar.md (clear)
 > "$SIDEBAR_FILE"
 
@@ -44,6 +59,12 @@ generate_sidebar() {
 
     # Check for README.md in the current directory
     if [[ -f "$dir_path/README.md" ]]; then
+        # Skip directory if frontmatter declares frontpage: 0
+        if should_skip "$dir_path/README.md"; then
+            echo "Skipping $dir_path (frontpage: 0)"
+            return
+        fi
+
         local title
         title=$(get_title_from_readme "$dir_path/README.md")
         if [[ -z "$title" ]]; then
