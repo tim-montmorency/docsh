@@ -173,7 +173,7 @@ if service == "github":
         fork = " *(fork)*" if r.get("fork") else ""
         site = r.get("homepage") or ""
         prefix = f"[↗]({site}) " if site else ""
-        return f"| [{name}]({url}){fork} | {prefix}{desc} | {date} |"
+        return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {date} |"
     repos = sorted(repos, key=lambda x: x.get("pushed_at", ""), reverse=True)
     header = f"| Repository | Description | {col} |"
     sep    =  "|---|---|---|"
@@ -198,7 +198,7 @@ elif service == "gitlab":
             ns_cell = f"[{ns_path}]({ns_url})" if ns_url else ns_path
             site = pages_url(r)
             prefix = f"[↗]({site}) " if site else ""
-            return f"| [{name}]({url}){fork} | {prefix}{desc} | {ns_cell} | {date} |"
+            return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {ns_cell} | {date} |"
         header = f"| Repository | Description | Group | {col} |"
         sep    =  "|---|---|---|---|"
     else:
@@ -210,7 +210,7 @@ elif service == "gitlab":
             fork = " *(fork)*" if r.get("forked_from_project") else ""
             site = pages_url(r)
             prefix = f"[↗]({site}) " if site else ""
-            return f"| [{name}]({url}){fork} | {prefix}{desc} | {date} |"
+            return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {date} |"
         header = f"| Repository | Description | {col} |"
         sep    =  "|---|---|---|"
 
@@ -224,7 +224,7 @@ elif service == "codeberg":
         fork = " *(fork)*" if r.get("fork") else ""
         site = r.get("website") or ""
         prefix = f"[↗]({site}) " if site else ""
-        return f"| [{name}]({url}){fork} | {prefix}{desc} | {date} |"
+        return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {date} |"
     repos = sorted(repos, key=lambda x: x.get("updated_at", ""), reverse=True)
     header = f"| Repository | Description | {col} |"
     sep    =  "|---|---|---|"
