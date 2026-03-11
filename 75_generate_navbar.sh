@@ -241,6 +241,28 @@ process_tagged_navbar() {
     local tmp_out
     tmp_out=$(mktemp)
 
+    # Emit the scan_dir itself first if its README qualifies
+    local self_readme="$scan_dir/README.md"
+    if [[ -f "$self_readme" ]]; then
+        local self_nav; self_nav=$(get_fm_value "$self_readme" "navbar")
+        if [[ "$self_nav" == "1" ]]; then
+            local self_title; self_title=$(get_title "$self_readme")
+            local self_tooltip; self_tooltip=$(get_tooltip "$self_readme" "$self_title")
+            local self_link; self_link=$(dir_link "$scan_dir")
+            local self_icon="$scan_dir/_icon.svg"
+            if [[ -f "$self_icon" ]]; then
+                local sg_b64; sg_b64=$(base64 -i "$self_icon" | tr -d '\n')
+                local sa_b64; sa_b64=$(sed "s/stroke=\"#888\"/stroke=\"${active_color_opt}\"/g" "$self_icon" | base64 | tr -d '\n')
+                printf '* [![%s](data:image/svg+xml;base64,%s)![](data:image/svg+xml;base64,%s)](%s "%s")\n' \
+                    "$self_title" "$sg_b64" "$sa_b64" "$self_link" "$self_tooltip" >> "$tmp_out"
+                echo "  Added (icon, self): $self_link  ($self_title)"
+            else
+                printf '* [%s](%s "%s")\n' "$self_title" "$self_link" "$self_tooltip" >> "$tmp_out"
+                echo "  Added (self): $self_link  ($self_title)"
+            fi
+        fi
+    fi
+
     walk_navbar "$tmp_out" "$scan_dir" "1" \
         "$maxdepth_opt" "$filter_opt" "$sort_opt" "$active_color_opt"
 
