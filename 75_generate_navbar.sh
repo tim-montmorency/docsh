@@ -122,13 +122,13 @@ replace_between_tags() {
 
 # ── Walker (one level only by default for navbar) ────────────────────────────
 #
-# walk_navbar OUTFILE DIR DEPTH MAXDEPTH FILTER SORT_FIELD ACTIVE_COLOR
+# walk_navbar OUTFILE DIR DEPTH MAXDEPTH FILTER SORT_FIELD
 #
 # Appends "* [Title](/path/)" for each qualifying child of DIR.
 
 walk_navbar() {
     local outfile="$1" dir="$2" depth="$3"
-    local maxdepth="$4" filter="$5" sort_field="$6" active_color="$7"
+    local maxdepth="$4" filter="$5" sort_field="$6"
 
     local tmp_kids
     tmp_kids=$(mktemp)
@@ -176,16 +176,12 @@ walk_navbar() {
         local tooltip; tooltip=$(get_tooltip "$readme" "$title")
         local link;  link=$(dir_link "$child")
 
-        # Embed _icon.svg as two base64 data URIs if present:
-        #   img 1 = grey (#888)  → shown normally
-        #   img 2 = active color → shown when li.active (CSS swaps them)
+        # Embed _icon.svg as base64 data URI if present (grey; active color applied at runtime by JS)
         local icon_path="$child/_icon.svg"
         if [[ -f "$icon_path" ]]; then
-            local icon_grey_b64; icon_grey_b64=$(base64 -i "$icon_path" | tr -d '\n')
-            local icon_active_b64
-            icon_active_b64=$(sed "s/stroke=\"#888\"/stroke=\"${active_color}\"/g" "$icon_path" | base64 | tr -d '\n')
-            printf '* [![%s](data:image/svg+xml;base64,%s)![](data:image/svg+xml;base64,%s)](%s "%s")\n' \
-                "$title" "$icon_grey_b64" "$icon_active_b64" "$link" "$tooltip" >> "$outfile"
+            local icon_b64; icon_b64=$(base64 -i "$icon_path" | tr -d '\n')
+            printf '* [![%s](data:image/svg+xml;base64,%s)](%s "%s")\n' \
+                "$title" "$icon_b64" "$link" "$tooltip" >> "$outfile"
             echo "  Added (icon): $link  ($title)"
         else
             printf '* [%s](%s "%s")\n' "$title" "$link" "$tooltip" >> "$outfile"
@@ -196,7 +192,7 @@ walk_navbar() {
         if [[ -z "$maxdepth" || "$depth" -lt "$maxdepth" ]]; then
             local sub_tmp; sub_tmp=$(mktemp)
             walk_navbar "$sub_tmp" "$child" "$((depth+1))" \
-                "$maxdepth" "$filter" "$sort_field" "$active_color"
+                "$maxdepth" "$filter" "$sort_field"
             if [[ -s "$sub_tmp" ]]; then
                 # Indent sub-items two spaces
                 sed 's/^/  /' "$sub_tmp" >> "$outfile"
@@ -218,15 +214,13 @@ process_tagged_navbar() {
     local tag
     tag=$(grep "<!-- start-replace-navbar" "$navbar" | head -1)
 
-    local dir_opt maxdepth_opt filter_opt sort_opt active_color_opt
-    dir_opt=$(           echo "$tag" | grep -oE 'dir="[^"]*"'          | sed 's/dir="//;s/"//'          || true)
-    maxdepth_opt=$(      echo "$tag" | grep -oE 'maxdepth="[^"]*"'     | sed 's/maxdepth="//;s/"//'     || true)
-    filter_opt=$(        echo "$tag" | grep -oE 'filter="[^"]*"'       | sed 's/filter="//;s/"//'       || true)
-    sort_opt=$(          echo "$tag" | grep -oE 'sort="[^"]*"'         | sed 's/sort="//;s/"//'         || true)
-    active_color_opt=$(  echo "$tag" | grep -oE 'active_color="[^"]*"' | sed 's/active_color="//;s/"//' || true)
-    [[ -z "$maxdepth_opt"    ]] && maxdepth_opt="1"
-    [[ -z "$filter_opt"      ]] && filter_opt="navbar=1"
-    [[ -z "$active_color_opt" ]] && active_color_opt="#2a7ae2"
+    local dir_opt maxdepth_opt filter_opt sort_opt
+    dir_opt=$(      echo "$tag" | grep -oE 'dir="[^"]*"'      | sed 's/dir="//;s/"//'      || true)
+    maxdepth_opt=$( echo "$tag" | grep -oE 'maxdepth="[^"]*"' | sed 's/maxdepth="//;s/"//' || true)
+    filter_opt=$(   echo "$tag" | grep -oE 'filter="[^"]*"'   | sed 's/filter="//;s/"//'   || true)
+    sort_opt=$(     echo "$tag" | grep -oE 'sort="[^"]*"'     | sed 's/sort="//;s/"//'     || true)
+    [[ -z "$maxdepth_opt" ]] && maxdepth_opt="1"
+    [[ -z "$filter_opt"   ]] && filter_opt="navbar=1"
 
     local scan_dir="$navbar_dir"
     if [[ -n "$dir_opt" ]]; then
@@ -252,9 +246,8 @@ process_tagged_navbar() {
             local self_icon="$scan_dir/_icon.svg"
             if [[ -f "$self_icon" ]]; then
                 local sg_b64; sg_b64=$(base64 -i "$self_icon" | tr -d '\n')
-                local sa_b64; sa_b64=$(sed "s/stroke=\"#888\"/stroke=\"${active_color_opt}\"/g" "$self_icon" | base64 | tr -d '\n')
-                printf '* [![%s](data:image/svg+xml;base64,%s)![](data:image/svg+xml;base64,%s)](%s "%s")\n' \
-                    "$self_title" "$sg_b64" "$sa_b64" "$self_link" "$self_tooltip" >> "$tmp_out"
+                printf '* [![%s](data:image/svg+xml;base64,%s)](%s "%s")\n' \
+                    "$self_title" "$sg_b64" "$self_link" "$self_tooltip" >> "$tmp_out"
                 echo "  Added (icon, self): $self_link  ($self_title)"
             else
                 printf '* [%s](%s "%s")\n' "$self_title" "$self_link" "$self_tooltip" >> "$tmp_out"
@@ -264,7 +257,7 @@ process_tagged_navbar() {
     fi
 
     walk_navbar "$tmp_out" "$scan_dir" "1" \
-        "$maxdepth_opt" "$filter_opt" "$sort_opt" "$active_color_opt"
+        "$maxdepth_opt" "$filter_opt" "$sort_opt"
 
     if [[ ! -s "$tmp_out" ]]; then
         echo "  No entries found for $(realpath --relative-to="$REPO_ROOT" "$navbar" 2>/dev/null || echo "$navbar")"
@@ -284,7 +277,7 @@ create_navbar() {
 
     local tmp_out
     tmp_out=$(mktemp)
-    walk_navbar "$tmp_out" "$REPO_ROOT" "1" "1" "navbar=1" "" "#2a7ae2"
+    walk_navbar "$tmp_out" "$REPO_ROOT" "1" "1" "navbar=1" ""
 
     {
         printf "<!-- Generated by docsh/75_generate_navbar.sh on %s -->\n" \
