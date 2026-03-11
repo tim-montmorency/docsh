@@ -172,11 +172,11 @@ if service == "github":
         date = (r.get("pushed_at") or "")[:10] or "—"
         fork = " *(fork)*" if r.get("fork") else ""
         site = r.get("homepage") or ""
-        site_cell = f"[↗]({site})" if site else ""
-        return f"| [{name}]({url}){fork} | {desc} | {site_cell} | {date} |"
+        prefix = f"[↗]({site}) " if site else ""
+        return f"| [{name}]({url}){fork} | {prefix}{desc} | {date} |"
     repos = sorted(repos, key=lambda x: x.get("pushed_at", ""), reverse=True)
-    header = f"| Repository | Description | Site | {col} |"
-    sep    =  "|---|---|---|---|"
+    header = f"| Repository | Description | {col} |"
+    sep    =  "|---|---|---|"
 
 elif service == "gitlab":
     col = "Last activity"
@@ -197,10 +197,10 @@ elif service == "gitlab":
             ns_url  = ns.get("web_url", "")
             ns_cell = f"[{ns_path}]({ns_url})" if ns_url else ns_path
             site = pages_url(r)
-            site_cell = f"[↗]({site})" if site else ""
-            return f"| [{name}]({url}){fork} | {desc} | {ns_cell} | {site_cell} | {date} |"
-        header = f"| Repository | Description | Group | Site | {col} |"
-        sep    =  "|---|---|---|---|---|"
+            prefix = f"[↗]({site}) " if site else ""
+            return f"| [{name}]({url}){fork} | {prefix}{desc} | {ns_cell} | {date} |"
+        header = f"| Repository | Description | Group | {col} |"
+        sep    =  "|---|---|---|---|"
     else:
         def row(r):
             name = r.get("name", "")
@@ -209,10 +209,10 @@ elif service == "gitlab":
             date = (r.get("last_activity_at") or "")[:10] or "—"
             fork = " *(fork)*" if r.get("forked_from_project") else ""
             site = pages_url(r)
-            site_cell = f"[↗]({site})" if site else ""
-            return f"| [{name}]({url}){fork} | {desc} | {site_cell} | {date} |"
-        header = f"| Repository | Description | Site | {col} |"
-        sep    =  "|---|---|---|---|"
+            prefix = f"[↗]({site}) " if site else ""
+            return f"| [{name}]({url}){fork} | {prefix}{desc} | {date} |"
+        header = f"| Repository | Description | {col} |"
+        sep    =  "|---|---|---|"
 
 elif service == "codeberg":
     col = "Last updated"
@@ -223,11 +223,11 @@ elif service == "codeberg":
         date = (r.get("updated_at") or "")[:10] or "—"
         fork = " *(fork)*" if r.get("fork") else ""
         site = r.get("website") or ""
-        site_cell = f"[↗]({site})" if site else ""
-        return f"| [{name}]({url}){fork} | {desc} | {site_cell} | {date} |"
+        prefix = f"[↗]({site}) " if site else ""
+        return f"| [{name}]({url}){fork} | {prefix}{desc} | {date} |"
     repos = sorted(repos, key=lambda x: x.get("updated_at", ""), reverse=True)
-    header = f"| Repository | Description | Site | {col} |"
-    sep    =  "|---|---|---|---|"
+    header = f"| Repository | Description | {col} |"
+    sep    =  "|---|---|---|"
 
 else:
     print("*Unknown service.*")
