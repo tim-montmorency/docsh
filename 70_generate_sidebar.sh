@@ -187,9 +187,9 @@ _walk_children() {
     if [[ -s "$tmp_kids" && -n "$sort_field" ]]; then
         local fv; fv=$(head -1 "$tmp_kids" | cut -f1)
         if [[ "$fv" =~ ^-?[0-9]+$ ]]; then
-            sort -t$'\t' -k1 -rn "$tmp_kids" -o "$tmp_kids"
+            sort -t$'\t' -k1,1rn -k2,2 "$tmp_kids" -o "$tmp_kids"
         else
-            sort -t$'\t' -k1    "$tmp_kids" -o "$tmp_kids"
+            sort -t$'\t' -k1,1  -k2,2  "$tmp_kids" -o "$tmp_kids"
         fi
     fi
 
