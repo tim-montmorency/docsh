@@ -482,7 +482,7 @@ process_gitrepos_for_readme() {
     local readme_path="$1"
     grep -q "<!-- start-replace-gitrepos" "$readme_path" || return 0
 
-    echo "Processing git repos in: $readme_path"
+    echo "Processing: ${readme_path#${ROOT_DIR}/}"
 
     local start_lines=()
     while IFS= read -r ln; do
@@ -569,19 +569,30 @@ except Exception:
         mv "$readme_path.tmp" "$readme_path"
 
         rm -f "$content_tmp"
-        echo "  Updated: $readme_path ($service/$label)"
+        echo "  Updated: ${readme_path#${ROOT_DIR}/} ($service/$label)"
     done
 }
 
 # ---------------------------------------------------------------------------
 # Walk the repo, skipping generated / vendor / tool directories.
 # ---------------------------------------------------------------------------
-find "$ROOT_DIR" -name "README.md" \
+# Run each README in parallel; collect output per-process then print atomically.
+_pids=()
+_outs=()
+while IFS= read -r readme; do
+    _t=$(mktemp)
+    _outs+=("$_t")
+    process_gitrepos_for_readme "$readme" >"$_t" 2>&1 &
+    _pids+=($!)
+done < <(find "$ROOT_DIR" -name "README.md" \
     -not -path "*/.git/*" \
     -not -path "*/node_modules/*" \
     -not -path "*/docsh/*" \
     -not -path "*/_site/*" \
-    -not -path "*/vendor/*" \
-    | while IFS= read -r readme; do
-        process_gitrepos_for_readme "$readme"
-    done
+    -not -path "*/vendor/*")
+
+for i in "${!_pids[@]}"; do
+    wait "${_pids[$i]}"
+    cat "${_outs[$i]}"
+    rm -f "${_outs[$i]}"
+done
