@@ -404,6 +404,15 @@ if not repos:
 
 lines = []
 
+def repo_heading(hashes, name, url, date, site, fork):
+    """Emit a plain-text heading with metadata in a <span class=gr>.
+    URL is stored as data-url (not a markdown link) so Docsify's router
+    never intercepts it; the docsify-gitrepos.js plugin builds all links.
+    """
+    site_attr = f' data-site="{site}"' if site else ""
+    url_attr  = f' data-url="{url}"'  if url  else ""
+    return f'{hashes} {name}{fork} <span class="gr" data-date="{date}"{url_attr}{site_attr}></span>'
+
 if service == "github":
     repos = sorted(repos, key=lambda x: x.get("pushed_at", ""), reverse=True)
     for r in repos:
@@ -413,9 +422,7 @@ if service == "github":
         desc = " ".join((r.get("description") or "").split())
         site = r.get("homepage") or ""
         fork = " *(fork)*" if r.get("fork") else ""
-        site_part = f" [↗]({site})" if site else ""
-        lines.append(f"{hashes} {name}{fork}")
-        lines.append(f"[⎇]({url}){site_part} · {date}")
+        lines.append(repo_heading(hashes, name, url, date, site, fork))
         if desc:
             lines.append("")
             lines.append(desc)
@@ -434,7 +441,6 @@ elif service == "gitlab":
         desc = " ".join((r.get("description") or "").split())
         site = pages_url(r)
         fork = " *(fork)*" if r.get("forked_from_project") else ""
-        site_part = f" [↗]({site})" if site else ""
         if group:
             ns = r.get("namespace") or {}
             ns_path = ns.get("full_path", "")
@@ -442,8 +448,7 @@ elif service == "gitlab":
             if ns_path and ns_path != group:
                 ns_label = f"[{ns_path}]({ns_url})" if ns_url else ns_path
                 desc = (desc + f" — {ns_label}") if desc else ns_label
-        lines.append(f"{hashes} {name}{fork}")
-        lines.append(f"[⎇]({url}){site_part} · {date}")
+        lines.append(repo_heading(hashes, name, url, date, site, fork))
         if desc:
             lines.append("")
             lines.append(desc)
@@ -458,9 +463,7 @@ elif service == "codeberg":
         desc = " ".join((r.get("description") or "").split())
         site = r.get("website") or ""
         fork = " *(fork)*" if r.get("fork") else ""
-        site_part = f" [↗]({site})" if site else ""
-        lines.append(f"{hashes} {name}{fork}")
-        lines.append(f"[⎇]({url}){site_part} · {date}")
+        lines.append(repo_heading(hashes, name, url, date, site, fork))
         if desc:
             lines.append("")
             lines.append(desc)
