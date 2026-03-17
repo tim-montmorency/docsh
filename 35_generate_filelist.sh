@@ -49,9 +49,9 @@ format_link_text() {
     echo "$filename" | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)} 1'
 }
 
-# Compute path of $1 relative to directory $2 — Python for cross-platform / macOS-safe
+# Compute path of $1 relative to directory $2
 relative_path() {
-    python3 -c "import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))" "$1" "$2"
+    echo "${1#${2}/}"
 }
 
 process_links_for_readme() {

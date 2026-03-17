@@ -66,55 +66,7 @@ set -euo pipefail
 shopt -s nullglob
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-# ── Frontmatter helpers ──────────────────────────────────────────────────────
-
-# get_fm_value FILE KEY
-# Reads the YAML frontmatter block (between the first two ---) and returns
-# the value for KEY, stripping inline comments and surrounding whitespace.
-get_fm_value() {
-    local file="$1" key="$2"
-    awk -v key="$key" '
-        /^---/ { fm++; next }
-        fm == 1 {
-            if (index($0, key ":") == 1) {
-                sub("^" key ":[[:space:]]*", "")
-                sub("[[:space:]]*#.*", "")
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-                print; exit
-            }
-        }
-        fm >= 2 { exit }
-    ' "$file" 2>/dev/null || true
-}
-
-# ── File replacement ─────────────────────────────────────────────────────────
-
-# replace_between_tags FILE NEW_CONTENT
-# Replaces content between the start and end tags (preserving the tag lines).
-replace_between_tags() {
-    local file="$1"
-    local new_content="$2"
-
-    local start_line end_line
-    start_line=$(grep -n "<!-- start-replace-frontmatter" "$file" | cut -d: -f1 | head -1)
-    end_line=$(grep -n "<!-- end-replace-frontmatter -->" "$file" | cut -d: -f1 | head -1)
-
-    if [[ -z "$start_line" || -z "$end_line" || "$start_line" -ge "$end_line" ]]; then
-        echo "  Skipping $file: invalid or missing tags"
-        return
-    fi
-
-    local tmp
-    tmp=$(mktemp)
-    sed -n "1,${start_line}p"    "$file"  >  "$tmp"
-    printf "%s\n" "$new_content"          >> "$tmp"
-    sed -n "${end_line},\$p"     "$file"  >> "$tmp"
-    mv "$tmp" "$file"
-
-    echo "  Updated: $(realpath --relative-to="$REPO_ROOT" "$file" 2>/dev/null || echo "$file")"
-}
+. "$SCRIPT_DIR/lib/docsh_lib.sh"
 
 # ── Template renderers ───────────────────────────────────────────────────────
 
@@ -251,7 +203,7 @@ collect_entries() {
 
         # Docsify link (absolute from site root)
         local rel_from_root
-        rel_from_root=$(realpath --relative-to="$REPO_ROOT" "$sub_abs" 2>/dev/null || echo "${sub_abs#$REPO_ROOT/}")
+        rel_from_root="${sub_abs#${REPO_ROOT}/}"
         local link="/${rel_from_root}/"
 
         if [[ "$tmpl" == "grid" ]]; then
@@ -352,24 +304,22 @@ process_readme() {
     esac
     rm -f "$tmp_entries"
 
-    replace_between_tags "$readme" "$content"
+    replace_between_tags "$readme" "frontmatter" "$content"
 }
 
 # ── Walk ─────────────────────────────────────────────────────────────────────
-
-EXCLUDED=(".git" "node_modules" "__pycache__" "docsh" "vendor" "_site")
 
 echo "Generating frontmatter content…"
 
 while IFS= read -r readme; do
     skip=0
-    for ex in "${EXCLUDED[@]}"; do
+    for ex in "${EXCLUDED_DIRS[@]}"; do
         [[ "$readme" == *"/${ex}/"* ]] && skip=1 && break
     done
     [[ $skip -eq 1 ]] && continue
 
     if grep -q "<!-- start-replace-frontmatter" "$readme" 2>/dev/null; then
-        echo "Processing: $(realpath --relative-to="$REPO_ROOT" "$readme" 2>/dev/null || echo "$readme")"
+        echo "Processing: ${readme#${REPO_ROOT}/}"
         process_readme "$readme"
     fi
 done < <(find "$REPO_ROOT" -name "README.md" -not -path "*/.git/*")

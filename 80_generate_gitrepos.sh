@@ -19,7 +19,18 @@
 #   exclude   —         Python regex; repos whose name matches are hidden
 #                       e.g. exclude="^(c[0-9]-|momo_modele)" to skip student repos
 #
+# Environment:
+#   GITHUB_TOKEN   optional  Personal access token; raises the GitHub API rate
+#                            limit from 60 to 5 000 req/h.  Set in shell or
+#                            export from your CI environment.
+#
 # Requires: curl, python3 (3.6+)
+#
+# Usage:
+#   bash docsh/80_generate_gitrepos.sh [DIR]
+#     DIR  root of the tree to search (default: parent of the docsh/ folder)
+#
+#   Called automatically by docsh/autorun.sh.
 
 set -euo pipefail
 shopt -s nullglob
@@ -92,11 +103,6 @@ headers = {
 token = os.environ.get("GITHUB_TOKEN", "")
 if token:
     headers["Authorization"] = f"token {token}"
-if not token and creator:
-    sys.stderr.write(
-        "  Warning: creator= filter requires GITHUB_TOKEN to avoid rate limiting.\n"
-        "  Set GITHUB_TOKEN=ghp_xxx and re-run.\n"
-    )
 
 all_repos = []
 page = 1

@@ -101,11 +101,11 @@ dir_link() {
 # ── Tag replacement ───────────────────────────────────────────────────────────
 
 replace_between_tags() {
-    local file="$1" new_content="$2"
+    local file="$1" tag_name="$2" new_content="$3"
     local start_line end_line
 
-    start_line=$(grep -n "<!-- start-replace-navbar" "$file" | cut -d: -f1 | head -1)
-    end_line=$(  grep -n "<!-- end-replace-navbar -->"       "$file" | cut -d: -f1 | head -1)
+    start_line=$(grep -n "<!-- start-replace-${tag_name}" "$file" | cut -d: -f1 | head -1)
+    end_line=$(  grep -n "<!-- end-replace-${tag_name} -->"        "$file" | cut -d: -f1 | head -1)
 
     if [[ -z "$start_line" || -z "$end_line" || "$start_line" -ge "$end_line" ]]; then
         echo "  Skipping: missing or invalid tags in $file" >&2
@@ -118,6 +118,7 @@ replace_between_tags() {
     printf "%s\n" "$new_content"       >> "$tmp"
     sed -n "${end_line},\$p"  "$file"  >> "$tmp"
     mv "$tmp" "$file"
+    echo "  Updated: ${file#${REPO_ROOT}/}"
 }
 
 # ── Walker (one level only by default for navbar) ────────────────────────────
@@ -260,14 +261,13 @@ process_tagged_navbar() {
         "$maxdepth_opt" "$filter_opt" "$sort_opt"
 
     if [[ ! -s "$tmp_out" ]]; then
-        echo "  No entries found for $(realpath --relative-to="$REPO_ROOT" "$navbar" 2>/dev/null || echo "$navbar")"
+        echo "  No entries found for ${navbar#${REPO_ROOT}/}"
         rm -f "$tmp_out"
         return 0
     fi
 
-    replace_between_tags "$navbar" "$(cat "$tmp_out")"
+    replace_between_tags "$navbar" "navbar" "$(cat "$tmp_out")"
     rm -f "$tmp_out"
-    echo "  Updated: $(realpath --relative-to="$REPO_ROOT" "$navbar" 2>/dev/null || echo "$navbar")"
 }
 
 # ── Create mode: generate a new _navbar.md at repo root ──────────────────────
@@ -312,10 +312,10 @@ if [[ "${#navbars[@]}" -eq 0 ]]; then
 else
     for navbar in "${navbars[@]}"; do
         if grep -q "<!-- start-replace-navbar" "$navbar" 2>/dev/null; then
-            echo "Processing: $(realpath --relative-to="$REPO_ROOT" "$navbar" 2>/dev/null || echo "$navbar")"
+            echo "Processing: ${navbar#${REPO_ROOT}/}"
             process_tagged_navbar "$navbar"
         else
-            echo "Skipping (no tags): $(realpath --relative-to="$REPO_ROOT" "$navbar" 2>/dev/null || echo "$navbar")"
+            echo "Skipping (no tags): ${navbar#${REPO_ROOT}/}"
         fi
     done
 fi

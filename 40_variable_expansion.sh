@@ -1,21 +1,35 @@
-#!/bin/sh
-# POSIX Markdown variable expansion:
-#   <!-- %: KEY -->...<!-- %; -->
-#   Short form: <!-- %: KEY -->...<!-- %; -->
-# Supports:
-#   1) Inline:  "# TP1 <!-- %: K -->VAL<!-- %; -->" 
-# 			or "# TP1 <!-- %: K -->VAL<!-- %; -->"
-#   2) Block:
-#			# TP1
-#			<!-- %: K -->
-#			VAL
-#			<!-- %; -->
-# 			or 
-#			# TP1
-#			<!-- %: K -->
-#			VAL
-#			<!-- %; -->
-# Preserves original line ending style (LF/CRLF/CR).
+#!/usr/bin/env bash
+# docsh/40_variable_expansion.sh — Expand variables in Markdown files.
+#
+# Scans all *.md files under ROOT_DIR for <!-- %: KEY --> ... <!-- %; --> markers
+# and replaces the content between them with the matching value from VARFILE.
+# Preserves original line-ending style (LF / CRLF / CR).
+#
+# ── Tag syntax ───────────────────────────────────────────────────────────────
+#
+#   Inline:  some text <!-- %: KEY -->OLD VALUE<!-- %; --> rest of line
+#   Block:   <!-- %: KEY -->
+#            OLD VALUE
+#            <!-- %; -->
+#
+# ── Variables file format ────────────────────────────────────────────────────
+#
+#   One KEY = VALUE pair per line; lines starting with # are comments.
+#   Default file name: .variable_expansion  (searched upward from ROOT_DIR)
+#
+#     COURSE_CODE = TP1
+#     TEACHER     = Marie Dupont
+#
+# ── Usage ────────────────────────────────────────────────────────────────────
+#   bash docsh/40_variable_expansion.sh [-f VARFILE] [-r ROOT] [-n] [-v]
+#     -f VARFILE   variables file        (default: .variable_expansion)
+#     -r ROOT      root directory to scan (default: .)
+#     -n           dry-run, do not modify files
+#     -v           verbose output
+#
+#   Called automatically by docsh/autorun.sh.
+#
+# Requires: perl
 
 set -eu
 
@@ -43,8 +57,8 @@ ROOT_DIR=.
 DRY_RUN=0
 VERBOSE=1
 
-# Space-separated excluded dirs (relative to ROOT_DIR)
-EXCLUDED_DIRS=".git node_modules __pycache__ .vscode docsh tools"
+# Directory basenames excluded from scanning
+EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "docsh" "tools")
 
 while getopts "f:r:nvh" opt; do
 	case "$opt" in
@@ -104,7 +118,7 @@ ABS_VAR_FILE=$(cd "$(dirname "$VAR_FILE")" 2>/dev/null && pwd || echo "")/$(base
 if [ "$VERBOSE" = "1" ]; then
 	echo "Using variable file: $VAR_FILE"
 	echo "Root dir: $ROOT_DIR"
-	echo "Excluded dirs: $EXCLUDED_DIRS"
+	echo "Excluded dirs: ${EXCLUDED_DIRS[*]}"
 fi
 
 # Check perl availability up front
@@ -113,20 +127,18 @@ if ! command -v perl >/dev/null 2>&1; then
 	exit 2
 fi
 
-# Build a find(1) command string with prunes; evaluate it once into a temp list
-PRUNE_EXPR=""
-for d in $EXCLUDED_DIRS; do
-	PRUNE_EXPR="$PRUNE_EXPR -path '$ROOT_DIR/$d' -prune -o"
+# Build find(1) prune args; collect results without eval
+PRUNE_ARGS=()
+for d in "${EXCLUDED_DIRS[@]}"; do
+	PRUNE_ARGS+=(-path "$ROOT_DIR/$d" -prune -o)
 done
-FIND_CMD="find '$ROOT_DIR' $PRUNE_EXPR -type f -name '*.md' -print"
 
-[ "$VERBOSE" = "1" ] && echo "Find command: $FIND_CMD"
+[ "$VERBOSE" = "1" ] && echo "Excluded dirs: ${EXCLUDED_DIRS[*]}"
 
-LIST_FILE=".$PROG_NAME.$$".list
+LIST_FILE=".$PROG_NAME.$$.list"
 trap 'rm -f "$LIST_FILE" 2>/dev/null || true' EXIT INT HUP TERM
 : > "$LIST_FILE"
-# shellcheck disable=SC2086
-eval "$FIND_CMD" > "$LIST_FILE"
+find "$ROOT_DIR" "${PRUNE_ARGS[@]}" -type f -name '*.md' -print > "$LIST_FILE"
 
 if [ ! -s "$LIST_FILE" ]; then
 	[ "$VERBOSE" = "1" ] && printf "No markdown files found under %s\n" "$ROOT_DIR"

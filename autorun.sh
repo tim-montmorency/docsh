@@ -1,4 +1,16 @@
 #!/bin/bash
+# docsh/autorun.sh — Run all docsh generation scripts in sequence.
+#
+# Discovers and executes every *.sh file in the docsh/ folder (sorted by name),
+# skipping autorun.sh itself.  Scripts always run from the repository root so
+# that relative paths inside each script resolve correctly.
+#
+# Execution time is printed after each script.  Any script that exits non-zero
+# aborts the run immediately.
+#
+# Usage:
+#   bash docsh/autorun.sh
+#   ./docsh/autorun.sh     (if the executable bit is set)
 
 # Fail on error, undef vars, and fail pipelines; make globs return empty when no match
 set -euo pipefail
@@ -13,28 +25,15 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPTS_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
 
-# Use the scripts directory as the root for running the contained scripts
-ROOT_DIR="$SCRIPTS_DIR"
-
 echo "Scripts directory: $SCRIPTS_DIR"
-echo "Root directory: $ROOT_DIR"
 
-# Do not attempt to install packages automatically in general-use script;
-# just warn the user if bash is missing.
-if ! command -v bash >/dev/null 2>&1; then
-    echo "ERROR: Bash not found in PATH. Please install bash and re-run."
-    exit 1
-fi
-
-# Change to the scripts directory so relative paths inside scripts behave as intended
-cd "$ROOT_DIR" || { echo "Error: Could not change to scripts directory"; exit 1; }
+# Change to repo root so scripts that default to pwd() resolve correctly
+cd "$SCRIPTS_DIR/.." || { echo "Error: Could not change to repo root"; exit 1; }
 
 echo "Running all scripts from docsh directory..."
 
-# Count scripts for debugging
+# Count scripts
 script_count=0
-echo "Looking for scripts in: $SCRIPTS_DIR"
-ls -la "$SCRIPTS_DIR"
 
 # Execute all .sh scripts in the scripts dir except this one
 for script in "$SCRIPTS_DIR"/*.sh; do
@@ -51,12 +50,14 @@ for script in "$SCRIPTS_DIR"/*.sh; do
 
         echo "Running $script_name..."
         script_count=$((script_count + 1))
+        t0=$SECONDS
 
         # Execute the script with bash
         if ! bash "$script"; then
             echo "Error: $script_name failed to execute." >&2
             exit 1
         fi
+        echo "  done in $((SECONDS - t0))s"
     else
         echo "Skipping $script (not a file)"
     fi

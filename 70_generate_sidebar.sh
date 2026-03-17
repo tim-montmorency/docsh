@@ -1,8 +1,7 @@
 #!/bin/bash
-# docsh/70_generate_sidebar.sh
+# docsh/70_generate_sidebar.sh — Generate Docsify _sidebar.md files.
 #
-# Overrides docsh/70_generate_sidebar.sh.
-# Generates Docsify _sidebar.md content by walking the repository tree.
+# Walks the repository tree and generates sidebar navigation content.
 #
 # ── Two modes ────────────────────────────────────────────────────────────────
 #
@@ -50,80 +49,7 @@ set -euo pipefail
 shopt -s nullglob
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "docsh" "vendor" "_site")
-
-# ── Frontmatter helpers ───────────────────────────────────────────────────────
-
-# get_fm_value FILE KEY  →  prints the value or nothing
-get_fm_value() {
-    local file="$1" key="$2"
-    awk -v key="$key" '
-        /^---/ { fm++; next }
-        fm == 1 {
-            if (index($0, key ":") == 1) {
-                sub("^" key ":[[:space:]]*", "")
-                sub("[[:space:]]*#.*", "")
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-                print; exit
-            }
-        }
-        fm >= 2 { exit }
-    ' "$file" 2>/dev/null || true
-}
-
-# get_title FILE  →  first H1 heading, then frontmatter title, then basename
-get_title() {
-    local file="$1"
-    local t
-    t=$(grep -m1 "^# " "$file" 2>/dev/null | sed 's/^# //' || true)
-    [[ -z "$t" ]] && t=$(get_fm_value "$file" "title")
-    [[ -z "$t" ]] && t=$(basename "$(dirname "$file")")
-    printf '%s' "$t"
-}
-
-# should_skip README  →  returns 0 (true) when the entry must be excluded
-# Rules:
-#   frontpage: 0  →  skip
-#   hidden: 1     →  skip
-should_skip() {
-    local fp hid
-    fp=$(get_fm_value "$1" "frontpage")
-    [[ "$fp" == "0" ]] && return 0
-    hid=$(get_fm_value "$1" "hidden")
-    [[ "$hid" == "1" ]]
-}
-
-# dir_link DIR_PATH  →  "/repo-relative/path/"
-dir_link() {
-    local rel="${1#$REPO_ROOT}"
-    rel="${rel#/}"; rel="${rel%/}"
-    [[ -z "$rel" ]] && rel="/" || rel="/$rel/"
-    printf '%s' "$(printf '%s' "$rel" | sed -E 's:/{2,}:/:g')"
-}
-
-# ── Tag replacement ───────────────────────────────────────────────────────────
-
-replace_between_tags() {
-    local file="$1" new_content="$2"
-    local start_line end_line
-
-    start_line=$(grep -n "<!-- start-replace-sidebar" "$file" | cut -d: -f1 | head -1)
-    end_line=$(  grep -n "<!-- end-replace-sidebar -->"       "$file" | cut -d: -f1 | head -1)
-
-    if [[ -z "$start_line" || -z "$end_line" || "$start_line" -ge "$end_line" ]]; then
-        echo "  Skipping: missing or invalid tags in $file" >&2
-        return 1
-    fi
-
-    local tmp
-    tmp=$(mktemp)
-    sed -n "1,${start_line}p" "$file" >  "$tmp"
-    printf "%s\n" "$new_content"       >> "$tmp"
-    sed -n "${end_line},\$p"  "$file"  >> "$tmp"
-    mv "$tmp" "$file"
-}
+. "$SCRIPT_DIR/lib/docsh_lib.sh"
 
 # ── Recursive walker ─────────────────────────────────────────────────────────
 #
@@ -240,14 +166,13 @@ process_tagged_sidebar() {
         "$maxdepth_opt" "$filter_opt" "$sort_opt" "$flat_opt"
 
     if [[ ! -s "$tmp_out" ]]; then
-        echo "  No entries found for $(realpath --relative-to="$REPO_ROOT" "$sidebar" 2>/dev/null || echo "$sidebar")"
+        echo "  No entries found for ${sidebar#${REPO_ROOT}/}"
         rm -f "$tmp_out"
         return 0
     fi
 
-    replace_between_tags "$sidebar" "$(cat "$tmp_out")"
+    replace_between_tags "$sidebar" "sidebar" "$(cat "$tmp_out")"
     rm -f "$tmp_out"
-    echo "  Updated: $(realpath --relative-to="$REPO_ROOT" "$sidebar" 2>/dev/null || echo "$sidebar")"
 }
 
 # ── Legacy full-file rewrite ──────────────────────────────────────────────────
@@ -279,10 +204,10 @@ echo "Generating sidebar content…"
 
 while IFS= read -r sidebar; do
     if grep -q "<!-- start-replace-sidebar" "$sidebar" 2>/dev/null; then
-        echo "Processing: $(realpath --relative-to="$REPO_ROOT" "$sidebar" 2>/dev/null || echo "$sidebar")"
+        echo "Processing: ${sidebar#${REPO_ROOT}/}"
         process_tagged_sidebar "$sidebar"
     else
-        echo "Processing (legacy): $(realpath --relative-to="$REPO_ROOT" "$sidebar" 2>/dev/null || echo "$sidebar")"
+        echo "Processing (legacy): ${sidebar#${REPO_ROOT}/}"
         legacy_generate "$sidebar" "false"
     fi
 done < <(find "$REPO_ROOT" -name "_sidebar.md" \

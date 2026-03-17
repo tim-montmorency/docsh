@@ -1,37 +1,40 @@
 #!/bin/bash
+# docsh/60_generate_subnav.sh — Generate sub-navigation link lists in README.md files.
+#
+# For each README.md that contains start/end subnav tags, generates a nested
+# Markdown list of immediate subdirectories that have their own README.md.
+# Entries show a cover image (_cover.png / _cover.jpg) when present, or a plain
+# text link.  Recurses into subdirectories up to the configured depth.
+#
+# ── Tag syntax ───────────────────────────────────────────────────────────────
+#
+#   <!-- start-replace-subnav [depth=N] -->
+#   <!-- end-replace-subnav -->
+#
+# ── Attributes ───────────────────────────────────────────────────────────────
+#
+#   depth=N   Maximum recursion depth (default: unlimited).
+#             depth=1 lists only immediate children.
+#
+# ── Usage ────────────────────────────────────────────────────────────────────
+#   bash docsh/60_generate_subnav.sh [DIR]
+#     DIR  root of the tree to scan (default: repository root)
+#
+#   Called automatically by docsh/autorun.sh.
 
 # Fail on error, undefined vars, and fail pipelines; make globs return empty when no match
 set -euo pipefail
 shopt -s nullglob
 
-## <!-- start-replace-subnav -->
-## <!-- end-replace-subnav -->
-
-# Excluded directory basenames
-EXCLUDED_DIRS=(".git" "node_modules" "__pycache__" ".vscode" "docsh" "tools")
-
 # Default to the parent directory of this script (usually the repo root).
 # You can still override by passing a root as the first argument.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ROOT_DIR="${1:-$DEFAULT_ROOT}"
+. "$SCRIPT_DIR/lib/docsh_lib.sh"
+ROOT_DIR="${1:-$REPO_ROOT}"
 
 echo "Generating subnavs for root: $ROOT_DIR"
 
-# Extracts title from the first line starting with '# ' in README.md
-get_title_from_readme() {
-    local readme_path="$1"
-    # Safely extract the first Markdown header (levels 1-6). If none, return empty.
-    local line
-    line=$(grep -m 1 -E '^#{1,6}[[:space:]]+' "$readme_path" || true)
-    if [[ -n "$line" ]]; then
-        echo "$line" | sed -E 's/^#{1,6}[[:space:]]+//'
-    else
-        printf ""
-    fi
-}
-
-# Recursively generates a list of subdirectories that contain README.md, formatted as markdown links
+# generate_subnav_content DIR INDENT_LEVEL [MAX_DEPTH] [README_DIR]
 generate_subnav_content() {
     local parent_dir="$1"
     local indent_level="$2"
@@ -71,7 +74,7 @@ generate_subnav_content() {
             local subdir_readme="$subdir/README.md"
             if [[ -f "$subdir_readme" ]]; then
                 local subdir_title
-                subdir_title=$(get_title_from_readme "$subdir_readme")
+                subdir_title=$(get_title "$subdir_readme")
                 [[ -z "$subdir_title" ]] && subdir_title="$base_dir"
 
                 local relative_path="${subdir#$ROOT_DIR/}"
@@ -130,45 +133,35 @@ generate_subnav_content() {
     fi
 }
 
-# Replaces content between <!-- start-replace-subnav --> and <!-- end-replace-subnav --> with new content
-replace_content_between_tags() {
+# replace_between_tags README_PATH NEW_CONTENT
+# Replaces content between subnav tags (preserving tag lines).
+replace_between_tags() {
     local readme_path="$1"
     local subnav_content="$2"
 
-    # Match a start tag that may include optional parameters, e.g. <!-- start-replace-subnav depth=1 -->
-    if grep -q "<!-- start-replace-subnav" "$readme_path" && grep -q "<!-- end-replace-subnav -->" "$readme_path"; then
-        echo "Processing $readme_path..."
-
-        # Find line numbers of the tags (start tag may include parameters)
-        local start_line
-        start_line=$(grep -n "<!-- start-replace-subnav" "$readme_path" | cut -d: -f1 | head -n 1)
-        local end_line
-        end_line=$(grep -n "<!-- end-replace-subnav -->" "$readme_path" | cut -d: -f1 | head -n 1)
-
-        # If for some reason start > end, skip
-        if [[ -z "$start_line" || -z "$end_line" || $start_line -gt $end_line ]]; then
-            echo "Skipping $readme_path, invalid tag order."
-            return
-        fi
-
-        # Construct the updated file:
-        # 1. Lines before start tag
-        # 2. Start tag line
-        # 3. New subnav content
-        # 4. End tag line
-        # 5. Lines after end tag
-        sed -n "1,$((start_line-1))p" "$readme_path" > "$readme_path.tmp"
-        sed -n "${start_line}p" "$readme_path" >> "$readme_path.tmp"
-        printf "%s\n" "$subnav_content" >> "$readme_path.tmp"
-        sed -n "${end_line}p" "$readme_path" >> "$readme_path.tmp"
-        sed -n "$((end_line+1)),\$p" "$readme_path" >> "$readme_path.tmp"
-
-        mv "$readme_path.tmp" "$readme_path"
-
-        echo "Updated $readme_path with new subnav content."
-    else
-        echo "Skipping $readme_path, <!-- start-replace-subnav --> or <!-- end-replace-subnav --> not found."
+    if ! grep -q "<!-- start-replace-subnav" "$readme_path" || ! grep -q "<!-- end-replace-subnav -->" "$readme_path"; then
+        return
     fi
+
+    echo "  Processing: ${readme_path#${REPO_ROOT}/}"
+
+    local start_line end_line
+    start_line=$(grep -n "<!-- start-replace-subnav" "$readme_path" | cut -d: -f1 | head -n 1)
+    end_line=$(grep -n  "<!-- end-replace-subnav -->" "$readme_path" | cut -d: -f1 | head -n 1)
+
+    if [[ -z "$start_line" || -z "$end_line" || $start_line -gt $end_line ]]; then
+        echo "Skipping $readme_path, invalid tag order."
+        return
+    fi
+
+    local tmp
+    tmp=$(mktemp)
+    sed -n "1,${start_line}p"         "$readme_path" >  "$tmp"
+    printf "%s\n" "$subnav_content"                  >> "$tmp"
+    sed -n "${end_line},\$p"          "$readme_path" >> "$tmp"
+    mv "$tmp" "$readme_path"
+
+    echo "  Updated: ${readme_path#${REPO_ROOT}/}"
 }
 
 # Updates the given directory's README.md with subnavigation if README.md exists
@@ -181,7 +174,7 @@ generate_readme_in_subfolders() {
     fi
 
     local title
-    title=$(get_title_from_readme "$readme_path")
+    title=$(get_title "$readme_path")
     [[ -z "$title" ]] && title=$(basename "$parent_dir")
 
     # Detect optional depth argument in the start tag: <!-- start-replace-subnav depth=N -->
@@ -198,7 +191,7 @@ generate_readme_in_subfolders() {
     local subnav_content
     subnav_content=$(generate_subnav_content "$parent_dir" 0 "$max_depth")
 
-    replace_content_between_tags "$readme_path" "$subnav_content"
+    replace_between_tags "$readme_path" "$subnav_content"
 }
 
 # Recursively walk through directories to generate and insert subnav content
@@ -208,8 +201,6 @@ generate_subnav() {
 
     if [[ -f "$dir_path/README.md" ]]; then
         generate_readme_in_subfolders "$dir_path"
-    else
-        echo "Skipped directory (no README.md): $dir_path"
     fi
 
     for subdir in "$dir_path"/*/; do
