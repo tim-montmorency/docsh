@@ -146,9 +146,38 @@ if [[ -z "$TYPST_BIN" ]]; then
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# needs_compile <typ_file> <pdf_out> <typst_root>
+#   Returns 0 (true) if the PDF needs to be (re)compiled:
+#     • PDF does not exist yet
+#     • The entry .typ file is newer than the PDF
+#     • Any _*.typ partial under typst_root is newer than the PDF
+#       (covers shared imports like _shared.typ)
+# ---------------------------------------------------------------------------
+needs_compile() {
+    local typ_file="$1" pdf_out="$2" typst_root="$3"
+    local dir; dir="$(dirname "$typ_file")"
+
+    [[ ! -f "$pdf_out" ]]            && return 0   # PDF missing
+    [[ "$typ_file" -nt "$pdf_out" ]] && return 0   # entry point changed
+
+    # Sibling README.md — each .typ does read("README.md") from its own dir
+    [[ -f "$dir/README.md" && "$dir/README.md" -nt "$pdf_out" ]] && return 0
+
+    # All _*.typ partials reachable from the typst root (e.g. _shared.typ)
+    while IFS= read -r partial; do
+        [[ "$partial" -nt "$pdf_out" ]] && return 0
+    done < <(find "$typst_root" -name "_*.typ" \
+        -not -path "*/.git/*" \
+        -not -path "*/node_modules/*" 2>/dev/null)
+
+    return 1   # up to date
+}
+
 echo "Compiling Typst documents under: $ROOT_DIR"
 
 compiled=0
+skipped=0
 errors=0
 
 # Find all *.typ files; skip:
@@ -162,6 +191,12 @@ while IFS= read -r typ_file; do
     stem="${filename%.typ}"
     pdf_out="${dir}/${stem}.pdf"
     typst_root="$(find_typst_root "$dir")"
+
+    if ! needs_compile "$typ_file" "$pdf_out" "$typst_root"; then
+        echo "  ✓ up to date: ${typ_file#"${ROOT_DIR}/"}"
+        skipped=$((skipped + 1))
+        continue
+    fi
 
     echo "  → ${typ_file#"${ROOT_DIR}/"}"
     if "$TYPST_BIN" compile --root "$typst_root" "$typ_file" "$pdf_out"; then
@@ -180,9 +215,9 @@ done < <(find "$ROOT_DIR" \
 
 echo ""
 if [[ $errors -eq 0 ]]; then
-    echo "Typst: $compiled document(s) compiled."
+    echo "Typst: $compiled compiled, $skipped up to date."
 else
-    echo "Typst: $compiled compiled, $errors failed." >&2
+    echo "Typst: $compiled compiled, $skipped up to date, $errors failed." >&2
 fi
 
 [[ $errors -eq 0 ]]
