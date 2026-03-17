@@ -28,10 +28,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="${1:-$DEFAULT_ROOT}"
 
-# Persistent cache for first-commit authors (service=github + creator= blocks).
-# Stored in ROOT_DIR so it lives with the content, can be committed, and is
-# reused by CI without a token after the first seeded run.
-GITREPOS_CACHE_FILE="${ROOT_DIR}/.gitrepos-creator-cache.json"
+# Caches are stored per-directory alongside the README.md that uses them:
+#   .gitrepos-creator-cache.json  — first-commit author lookups (GitHub creator= filter)
+#   .gitrepos-result-<service>-<target>.json — last successful fetch; used as
+#                                              fallback when the API is unavailable.
 
 # ---------------------------------------------------------------------------
 # Fetch raw JSON from the service API into stdout.
@@ -68,7 +68,8 @@ PYEOF
 }
 
 fetch_repos() {
-    local service="$1" username="$2" group="$3" org="${4:-}" creator="${5:-}" exclude="${6:-}"
+    local service="$1" username="$2" group="$3" org="${4:-}" creator="${5:-}" exclude="${6:-}" cache_dir="${7:-$ROOT_DIR}"
+    local _creator_cache="${cache_dir}/.gitrepos-creator-cache.json"
     case "$service" in
         github)
             if [[ -n "$org" ]]; then
@@ -76,7 +77,7 @@ fetch_repos() {
                 #   1. Pre-filter by exclude regex (name + description) — cheap, no extra calls
                 #   2. If creator= set: check first commit author (2 calls/repo)
                 #      Requires GITHUB_TOKEN — aborts cleanly if rate limited.
-                python3 - "$org" "$creator" "$exclude" "$GITREPOS_CACHE_FILE" <<'PYEOF'
+                python3 - "$org" "$creator" "$exclude" "$_creator_cache" <<'PYEOF'
 import sys, json, os, re as _re, urllib.request
 
 org        = sys.argv[1]
@@ -235,20 +236,49 @@ if creator:
 print(json.dumps(all_repos))
 PYEOF
             else
-                # User repos mode
-                local _base_url="https://api.github.com/users/${username}/repos?sort=pushed&per_page=100"
-                if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-                    curl -sf --max-time 15 \
-                        -H "Accept: application/vnd.github.v3+json" \
-                        -H "User-Agent: docsh-gitrepos/1.0" \
-                        -H "Authorization: token ${GITHUB_TOKEN}" \
-                        "$_base_url" || { echo "  Warning: GitHub API error for @${username} (check token)" >&2; echo "[]"; }
-                else
-                    curl -sf --max-time 15 \
-                        -H "Accept: application/vnd.github.v3+json" \
-                        -H "User-Agent: docsh-gitrepos/1.0" \
-                        "$_base_url" || { echo "  Warning: GitHub API rate limit hit for @${username} — set GITHUB_TOKEN=ghp_xxx and re-run." >&2; echo "[]"; }
-                fi
+                # User repos mode — Python for pagination, token support, and graceful rate-limit handling
+                python3 - "$username" <<'PYEOF'
+import sys, json, os, urllib.request
+
+username = sys.argv[1]
+headers = {
+    "Accept":     "application/vnd.github.v3+json",
+    "User-Agent": "docsh-gitrepos/1.0",
+}
+token = os.environ.get("GITHUB_TOKEN", "")
+if token:
+    headers["Authorization"] = f"token {token}"
+
+all_repos = []
+page = 1
+while True:
+    url = (f"https://api.github.com/users/{username}/repos"
+           f"?sort=pushed&per_page=100&page={page}")
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            batch = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 429):
+            sys.stderr.write(
+                f"  Warning: GitHub API rate limit hit for @{username} —"
+                " set GITHUB_TOKEN=ghp_xxx and re-run.\n"
+            )
+        else:
+            sys.stderr.write(f"  GitHub API error for @{username}: {e}\n")
+        break
+    except Exception as e:
+        sys.stderr.write(f"  GitHub fetch error for @{username}: {e}\n")
+        break
+    if not batch:
+        break
+    all_repos.extend(batch)
+    if len(batch) < 100:
+        break
+    page += 1
+
+print(json.dumps(all_repos))
+PYEOF
             fi
             ;;
         gitlab)
@@ -492,11 +522,36 @@ process_gitrepos_for_readme() {
         fi
         echo "  Fetching $service repos for $label..."
 
+        local readme_dir
+        readme_dir="$(dirname "$readme_path")"
+
         local json_tmp content_tmp
         json_tmp="$(mktemp)"
         content_tmp="$(mktemp)"
 
-        fetch_repos   "$service" "$username" "$group" "$org" "$creator" "$exclude" > "$json_tmp"
+        fetch_repos "$service" "$username" "$group" "$org" "$creator" "$exclude" "$readme_dir" > "$json_tmp"
+
+        # Result cache: save on success; restore on empty/failed fetch so we never
+        # show "*No public repositories found.*" due to a transient API failure.
+        local result_cache
+        result_cache="${readme_dir}/.gitrepos-result-${service}-${org:-${group:-${username:-unknown}}}.json"
+        local _is_empty
+        _is_empty=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    repos = d.get('data', d) if isinstance(d, dict) else d
+    print('1' if not repos else '0')
+except Exception:
+    print('1')
+" "$json_tmp")
+        if [[ "$_is_empty" == "0" ]]; then
+            cp "$json_tmp" "$result_cache"
+        elif [[ -f "$result_cache" ]]; then
+            echo "  Warning: API returned no repos for $label — using cached result"
+            cp "$result_cache" "$json_tmp"
+        fi
+
         format_repos  "$service" "$json_tmp" "$group" "$exclude" "$heading"         > "$content_tmp"
         rm -f "$json_tmp"
 
