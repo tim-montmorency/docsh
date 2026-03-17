@@ -7,8 +7,17 @@
 #
 # Tag syntax:
 #   <!-- start-replace-gitrepos service="github|gitlab|codeberg" username="USER" -->
+#   <!-- start-replace-gitrepos service="github" org="ORG" [exclude="REGEX"] -->
 #   ...generated content replaced on each run...
 #   <!-- end-replace-gitrepos -->
+#
+# Attributes:
+#   service   required  github | gitlab | codeberg
+#   username  —         user account repos (github/gitlab/codeberg)
+#   org       —         GitHub organisation repos (replaces username)
+#   group     —         GitLab group path
+#   exclude   —         Python regex; repos whose name matches are hidden
+#                       e.g. exclude="^(c[0-9]-|momo_modele)" to skip student repos
 #
 # Requires: curl, python3 (3.6+)
 
@@ -18,6 +27,11 @@ shopt -s nullglob
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEFAULT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="${1:-$DEFAULT_ROOT}"
+
+# Persistent cache for first-commit authors (service=github + creator= blocks).
+# Stored in ROOT_DIR so it lives with the content, can be committed, and is
+# reused by CI without a token after the first seeded run.
+GITREPOS_CACHE_FILE="${ROOT_DIR}/.gitrepos-creator-cache.json"
 
 # ---------------------------------------------------------------------------
 # Fetch raw JSON from the service API into stdout.
@@ -54,14 +68,188 @@ PYEOF
 }
 
 fetch_repos() {
-    local service="$1" username="$2" group="$3"
+    local service="$1" username="$2" group="$3" org="${4:-}" creator="${5:-}" exclude="${6:-}"
     case "$service" in
         github)
-            curl -sf --max-time 15 \
-                -H "Accept: application/vnd.github.v3+json" \
-                -H "User-Agent: docsh-gitrepos/1.0" \
-                "https://api.github.com/users/${username}/repos?sort=pushed&per_page=100" \
-                || echo "[]"
+            if [[ -n "$org" ]]; then
+                # Org mode — fetch all public org repos (paginated), then:
+                #   1. Pre-filter by exclude regex (name + description) — cheap, no extra calls
+                #   2. If creator= set: check first commit author (2 calls/repo)
+                #      Requires GITHUB_TOKEN — aborts cleanly if rate limited.
+                python3 - "$org" "$creator" "$exclude" "$GITREPOS_CACHE_FILE" <<'PYEOF'
+import sys, json, os, re as _re, urllib.request
+
+org        = sys.argv[1]
+creator    = sys.argv[2].lower()  # may be empty string
+exclude    = sys.argv[3]          # may be empty string
+cache_path = sys.argv[4] if len(sys.argv) > 4 else ""
+
+headers = {
+    "Accept":     "application/vnd.github.v3+json",
+    "User-Agent": "docsh-gitrepos/1.0",
+}
+token = os.environ.get("GITHUB_TOKEN", "")
+if token:
+    headers["Authorization"] = f"token {token}"
+if not token and creator:
+    sys.stderr.write(
+        "  Warning: creator= filter requires GITHUB_TOKEN to avoid rate limiting.\n"
+        "  Set GITHUB_TOKEN=ghp_xxx and re-run.\n"
+    )
+
+all_repos = []
+page = 1
+while True:
+    url = (f"https://api.github.com/orgs/{org}/repos"
+           f"?sort=pushed&per_page=100&page={page}")
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            batch = json.load(r)
+    except Exception as e:
+        sys.stderr.write(f"GitHub fetch error (org repos, page {page}): {e}\n")
+        break
+    if not batch:
+        break
+    all_repos.extend(batch)
+    if len(batch) < 100:
+        break
+    page += 1
+
+# ── Step 1: pre-filter by exclude regex (name + description) ──────────────────
+# Done here (not just in format_repos) so creator= has fewer repos to check.
+if exclude:
+    pat = _re.compile(exclude, _re.IGNORECASE)
+    before = len(all_repos)
+    all_repos = [
+        r for r in all_repos
+        if not pat.search(r.get("name", "") or "")
+        and not pat.search(r.get("description", "") or "")
+    ]
+    sys.stderr.write(f"  exclude filter: {before} → {len(all_repos)} repos\n")
+
+# ── Step 2: first-commit author filter ──────────────────────────────────────
+# Load persistent cache — first commits never change, so already-checked repos
+# cost 0 API calls on every run after the first.
+if creator:
+    cache = {}
+    if cache_path:
+        try:
+            with open(cache_path) as f:
+                cache = json.load(f)
+        except Exception:
+            cache = {}
+
+    def first_commit_author(full_name):
+        """Return (github_login, git_name) of the repo's first-ever commit.
+        Returns (None, None) on error; raises RuntimeError on rate limit."""
+        url = f"https://api.github.com/repos/{full_name}/commits?per_page=1"
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                link    = r.headers.get("Link", "")
+                commits = json.load(r)
+                last_url = None
+                for part in link.split(","):
+                    part = part.strip()
+                    if 'rel="last"' in part:
+                        m = _re.match(r'<([^>]+)>', part)
+                        if m:
+                            last_url = m.group(1)
+                if last_url:
+                    req2 = urllib.request.Request(last_url, headers=headers)
+                    with urllib.request.urlopen(req2, timeout=15) as r2:
+                        commits = json.load(r2)
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429):
+                raise RuntimeError(
+                    f"Rate limit hit ({e.code}). "
+                    "Set GITHUB_TOKEN=ghp_xxx and re-run."
+                )
+            sys.stderr.write(f"  first-commit fetch error ({full_name}): {e}\n")
+            return None, None
+        except Exception as e:
+            sys.stderr.write(f"  first-commit fetch error ({full_name}): {e}\n")
+            return None, None
+        if not commits:
+            return None, None
+        c = commits[0]
+        login = (c.get("author") or {}).get("login", "") or ""
+        name  = ((c.get("commit") or {}).get("author") or {}).get("name", "") or ""
+        return login.lower(), name.lower()
+
+    cached_hits = 0
+    uncached    = []
+    filtered    = []
+    for r in all_repos:
+        full = r["full_name"]
+        if full in cache:
+            cached_hits += 1
+            e = cache[full]
+            if creator in (e.get("login", ""), e.get("name", "")):
+                filtered.append(r)
+        else:
+            uncached.append(r)
+
+    if cached_hits:
+        sys.stderr.write(f"  first-commit cache: {cached_hits} hits, {len(uncached)} to fetch\n")
+    if uncached:
+        sys.stderr.write(
+            f"  Checking first-commit author for {len(uncached)} repos"
+            f" (looking for '{creator}')...\n"
+        )
+
+    cache_dirty = False
+    try:
+        for r in uncached:
+            login, name = first_commit_author(r["full_name"])
+            cache[r["full_name"]] = {"login": login or "", "name": name or ""}
+            cache_dirty = True
+            if creator in (login, name):
+                filtered.append(r)
+    except RuntimeError as e:
+        sys.stderr.write(f"  Aborting creator= check: {e}\n")
+        all_repos = filtered
+        if cache_dirty and cache_path:
+            try:
+                with open(cache_path, "w") as f:
+                    json.dump(cache, f, indent=2)
+            except Exception:
+                pass
+        print(json.dumps(all_repos))
+        sys.exit(0)
+
+    if uncached:
+        sys.stderr.write(f"  {len(filtered)}/{len(all_repos)} repos match creator '{creator}'\n")
+
+    if cache_dirty and cache_path:
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(cache, f, indent=2)
+            sys.stderr.write(f"  Cache updated ({len(cache)} entries)\n")
+        except Exception as e:
+            sys.stderr.write(f"  Warning: could not write cache: {e}\n")
+
+    all_repos = filtered
+
+print(json.dumps(all_repos))
+PYEOF
+            else
+                # User repos mode
+                local _base_url="https://api.github.com/users/${username}/repos?sort=pushed&per_page=100"
+                if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+                    curl -sf --max-time 15 \
+                        -H "Accept: application/vnd.github.v3+json" \
+                        -H "User-Agent: docsh-gitrepos/1.0" \
+                        -H "Authorization: token ${GITHUB_TOKEN}" \
+                        "$_base_url" || { echo "  Warning: GitHub API error for @${username} (check token)" >&2; echo "[]"; }
+                else
+                    curl -sf --max-time 15 \
+                        -H "Accept: application/vnd.github.v3+json" \
+                        -H "User-Agent: docsh-gitrepos/1.0" \
+                        "$_base_url" || { echo "  Warning: GitHub API rate limit hit for @${username} — set GITHUB_TOKEN=ghp_xxx and re-run." >&2; echo "[]"; }
+                fi
+            fi
             ;;
         gitlab)
             if [[ -n "$group" ]]; then
@@ -134,17 +322,22 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Read JSON from $2 (file path), format as a markdown table, write to stdout.
-# The Python script is supplied via heredoc (stdin to python3 -).
+# Read JSON from $2 (file path), format as repo cards (heading + icons + date
+# + description), write to stdout.
+# $4 = exclude regex (optional)   — repos matching it are dropped (safety net)
+# $5 = heading level (optional)   — default 2  (overridable via heading="N")
 # ---------------------------------------------------------------------------
 format_repos() {
-    local service="$1" json_file="$2" group="${3:-}"
-    python3 - "$service" "$json_file" "$group" <<'PYEOF'
-import sys, json
+    local service="$1" json_file="$2" group="${3:-}" exclude="${4:-}" heading_level="${5:-}"
+    python3 - "$service" "$json_file" "$group" "$exclude" "$heading_level" <<'PYEOF'
+import sys, json, re
 
-service   = sys.argv[1]
-json_file = sys.argv[2]
-group     = sys.argv[3] if len(sys.argv) > 3 else ""
+service       = sys.argv[1]
+json_file     = sys.argv[2]
+group         = sys.argv[3] if len(sys.argv) > 3 else ""
+exclude       = sys.argv[4] if len(sys.argv) > 4 else ""
+heading_level = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5].isdigit() else 2
+hashes        = "#" * heading_level
 
 try:
     with open(json_file) as f:
@@ -159,84 +352,89 @@ elif isinstance(payload, list):
 else:
     repos = []
 
+# Safety-net exclude filter (primary filter already ran in fetch_repos for orgs)
+if exclude:
+    pat = re.compile(exclude, re.IGNORECASE)
+    repos = [
+        r for r in repos
+        if not pat.search(r.get("name", "") or "")
+        and not pat.search(r.get("description", "") or "")
+        and not pat.search(r.get("path", "") or "")
+    ]
+
 if not repos:
     print("*No public repositories found.*")
     sys.exit(0)
 
+lines = []
+
 if service == "github":
-    col = "Last push"
-    def row(r):
+    repos = sorted(repos, key=lambda x: x.get("pushed_at", ""), reverse=True)
+    for r in repos:
         name = r.get("name", "")
-        desc = " ".join((r.get("description") or "").split()).replace("|", "\\|")
         url  = r.get("html_url", "")
         date = (r.get("pushed_at") or "")[:10] or "—"
-        fork = " *(fork)*" if r.get("fork") else ""
+        desc = " ".join((r.get("description") or "").split())
         site = r.get("homepage") or ""
-        prefix = f"[↗]({site}) " if site else ""
-        return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {date} |"
-    repos = sorted(repos, key=lambda x: x.get("pushed_at", ""), reverse=True)
-    header = f"| Repository | Description | {col} |"
-    sep    =  "|---|---|---|"
+        fork = " *(fork)*" if r.get("fork") else ""
+        site_part = f" [↗]({site})" if site else ""
+        lines.append(f"{hashes} {name}{fork}")
+        lines.append(f"[⎇]({url}){site_part} · {date}")
+        if desc:
+            lines.append("")
+            lines.append(desc)
+        lines.append("")
 
 elif service == "gitlab":
-    col = "Last activity"
     def pages_url(r):
         if r.get("pages_access_level") != "enabled":
             return ""
         parts = r.get("path_with_namespace", "").split("/")
         return f"https://{parts[0]}.gitlab.io/{'/'.join(parts[1:])}/" if len(parts) > 1 else ""
-    if group:
-        def row(r):
-            name = r.get("name", "")
-            desc = " ".join((r.get("description") or "").split()).replace("|", "\\|")
-            url  = r.get("web_url", "")
-            date = (r.get("last_activity_at") or "")[:10] or "—"
-            fork = " *(fork)*" if r.get("forked_from_project") else ""
-            ns   = r.get("namespace") or {}
+    for r in repos:
+        name = r.get("name", "")
+        url  = r.get("web_url", "")
+        date = (r.get("last_activity_at") or "")[:10] or "—"
+        desc = " ".join((r.get("description") or "").split())
+        site = pages_url(r)
+        fork = " *(fork)*" if r.get("forked_from_project") else ""
+        site_part = f" [↗]({site})" if site else ""
+        if group:
+            ns = r.get("namespace") or {}
             ns_path = ns.get("full_path", "")
             ns_url  = ns.get("web_url", "")
-            ns_cell = f"[{ns_path}]({ns_url})" if ns_url else ns_path
-            site = pages_url(r)
-            prefix = f"[↗]({site}) " if site else ""
-            return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {ns_cell} | {date} |"
-        header = f"| Repository | Description | Group | {col} |"
-        sep    =  "|---|---|---|---|"
-    else:
-        def row(r):
-            name = r.get("name", "")
-            desc = " ".join((r.get("description") or "").split()).replace("|", "\\|")
-            url  = r.get("web_url", "")
-            date = (r.get("last_activity_at") or "")[:10] or "—"
-            fork = " *(fork)*" if r.get("forked_from_project") else ""
-            site = pages_url(r)
-            prefix = f"[↗]({site}) " if site else ""
-            return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {date} |"
-        header = f"| Repository | Description | {col} |"
-        sep    =  "|---|---|---|"
+            if ns_path and ns_path != group:
+                ns_label = f"[{ns_path}]({ns_url})" if ns_url else ns_path
+                desc = (desc + f" — {ns_label}") if desc else ns_label
+        lines.append(f"{hashes} {name}{fork}")
+        lines.append(f"[⎇]({url}){site_part} · {date}")
+        if desc:
+            lines.append("")
+            lines.append(desc)
+        lines.append("")
 
 elif service == "codeberg":
-    col = "Last updated"
-    def row(r):
+    repos = sorted(repos, key=lambda x: x.get("updated_at", ""), reverse=True)
+    for r in repos:
         name = r.get("name", "")
-        desc = " ".join((r.get("description") or "").split()).replace("|", "\\|")
         url  = r.get("html_url", "")
         date = (r.get("updated_at") or "")[:10] or "—"
-        fork = " *(fork)*" if r.get("fork") else ""
+        desc = " ".join((r.get("description") or "").split())
         site = r.get("website") or ""
-        prefix = f"[↗]({site}) " if site else ""
-        return f"| [{name}]({url}){fork} | {(prefix + desc).strip()} | {date} |"
-    repos = sorted(repos, key=lambda x: x.get("updated_at", ""), reverse=True)
-    header = f"| Repository | Description | {col} |"
-    sep    =  "|---|---|---|"
+        fork = " *(fork)*" if r.get("fork") else ""
+        site_part = f" [↗]({site})" if site else ""
+        lines.append(f"{hashes} {name}{fork}")
+        lines.append(f"[⎇]({url}){site_part} · {date}")
+        if desc:
+            lines.append("")
+            lines.append(desc)
+        lines.append("")
 
 else:
     print("*Unknown service.*")
     sys.exit(0)
 
-print(header)
-print(sep)
-for r in repos:
-    print(row(r))
+print("\n".join(lines).rstrip())
 PYEOF
 }
 
@@ -261,13 +459,17 @@ process_gitrepos_for_readme() {
         local tag_line
         tag_line="$(sed -n "${start_ln}p" "$readme_path")"
 
-        local service="" username="" group=""
+        local service="" username="" group="" org="" exclude="" creator="" heading=""
         [[ "$tag_line" =~ service=\"([^\"]+)\" ]]   && service="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ username=\"([^\"]+)\" ]]  && username="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ group=\"([^\"]+)\" ]]     && group="${BASH_REMATCH[1]}"
+        [[ "$tag_line" =~ org=\"([^\"]+)\" ]]       && org="${BASH_REMATCH[1]}"
+        [[ "$tag_line" =~ exclude=\"([^\"]+)\" ]]   && exclude="${BASH_REMATCH[1]}"
+        [[ "$tag_line" =~ creator=\"([^\"]+)\" ]]   && creator="${BASH_REMATCH[1]}"
+        [[ "$tag_line" =~ heading=\"([^\"]+)\" ]]   && heading="${BASH_REMATCH[1]}"
 
-        if [[ -z "$service" || ( -z "$username" && -z "$group" ) ]]; then
-            echo "  Skipping block at line $start_ln: missing service or username/group"
+        if [[ -z "$service" || ( -z "$username" && -z "$group" && -z "$org" ) ]]; then
+            echo "  Skipping block at line $start_ln: missing service or username/group/org"
             continue
         fi
 
@@ -281,15 +483,21 @@ process_gitrepos_for_readme() {
         fi
 
         local label=""
-        [[ -n "$group" ]]    && label="group:$group" || label="@$username"
+        if [[ -n "$org" ]]; then
+            label="${org}${creator:+ creator:$creator}${exclude:+ (exclude: $exclude)}"
+        elif [[ -n "$group" ]]; then
+            label="group:$group"
+        else
+            label="@$username"
+        fi
         echo "  Fetching $service repos for $label..."
 
         local json_tmp content_tmp
         json_tmp="$(mktemp)"
         content_tmp="$(mktemp)"
 
-        fetch_repos   "$service" "$username" "$group" > "$json_tmp"
-        format_repos  "$service" "$json_tmp" "$group" > "$content_tmp"
+        fetch_repos   "$service" "$username" "$group" "$org" "$creator" "$exclude" > "$json_tmp"
+        format_repos  "$service" "$json_tmp" "$group" "$exclude" "$heading"         > "$content_tmp"
         rm -f "$json_tmp"
 
         {
