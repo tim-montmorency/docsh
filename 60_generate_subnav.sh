@@ -77,16 +77,11 @@ generate_subnav_content() {
                 subdir_title=$(get_title "$subdir_readme")
                 [[ -z "$subdir_title" ]] && subdir_title="$base_dir"
 
-                local relative_path="${subdir#$ROOT_DIR/}"
-                relative_path="${relative_path#/}"
-                relative_path="${relative_path%/}"
-
-                local link
-                if [[ -n "$relative_path" ]]; then
-                    link="/${relative_path}/"
-                else
-                    link="/"
-                fi
+                # Build link relative to the README being generated
+                local link_rel="${subdir#$readme_dir/}"
+                link_rel="${link_rel#/}"
+                link_rel="${link_rel%/}"
+                local link="./${link_rel}/"
 
                 local indent=""
                 for ((i=0; i<indent_level; i++)); do

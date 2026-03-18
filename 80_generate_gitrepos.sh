@@ -405,13 +405,13 @@ if not repos:
 lines = []
 
 def repo_heading(hashes, name, url, date, site, fork):
-    """Emit a plain-text heading with metadata in a <span class=gr>.
-    URL is stored as data-url (not a markdown link) so Docsify's router
-    never intercepts it; the docsify-gitrepos.js plugin builds all links.
+    """Emit a heading in markdown-native format.
+    Repo name links to the URL, date is in italics, optional site link.
+    The docsify-gitrepos.js plugin extracts metadata from this format.
     """
-    site_attr = f' data-site="{site}"' if site else ""
-    url_attr  = f' data-url="{url}"'  if url  else ""
-    return f'{hashes} {name}{fork} <span class="gr" data-date="{date}"{url_attr}{site_attr}></span>'
+    link = f'[{name}]({url})' if url else name
+    site_part = f' [site]({site})' if site else ''
+    return f'{hashes} {link}{fork} *{date}*{site_part}'
 
 if service == "github":
     repos = sorted(repos, key=lambda x: x.get("pushed_at", ""), reverse=True)
