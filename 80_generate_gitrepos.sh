@@ -361,19 +361,16 @@ PYEOF
 # Read JSON from $2 (file path), format as repo cards (heading + icons + date
 # + description), write to stdout.
 # $4 = exclude regex (optional)   — repos matching it are dropped (safety net)
-# $5 = heading level (optional)   — default 2  (overridable via heading="N")
 # ---------------------------------------------------------------------------
 format_repos() {
-    local service="$1" json_file="$2" group="${3:-}" exclude="${4:-}" heading_level="${5:-}"
-    python3 - "$service" "$json_file" "$group" "$exclude" "$heading_level" <<'PYEOF'
+    local service="$1" json_file="$2" group="${3:-}" exclude="${4:-}"
+    python3 - "$service" "$json_file" "$group" "$exclude" <<'PYEOF'
 import sys, json, re
 
 service       = sys.argv[1]
 json_file     = sys.argv[2]
 group         = sys.argv[3] if len(sys.argv) > 3 else ""
 exclude       = sys.argv[4] if len(sys.argv) > 4 else ""
-heading_level = int(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5].isdigit() else 2
-hashes        = "#" * heading_level
 
 try:
     with open(json_file) as f:
@@ -404,14 +401,30 @@ if not repos:
 
 lines = []
 
-def repo_heading(hashes, name, url, date, site, fork):
-    """Emit a heading in markdown-native format.
-    Repo name links to the URL, date is in italics, optional site link.
-    The docsify-gitrepos.js plugin extracts metadata from this format.
+def cover_url(service, r):
+    """Compute the raw cover image URL for the repo."""
+    if service == "github":
+        return f"https://raw.githubusercontent.com/{r.get('full_name', '')}/HEAD/_cover.jpg"
+    elif service == "gitlab":
+        return f"https://gitlab.com/{r.get('path_with_namespace', '')}/-/raw/HEAD/_cover.jpg"
+    elif service == "codeberg":
+        branch = r.get("default_branch", "main") or "main"
+        return f"https://codeberg.org/{r.get('full_name', '')}/raw/branch/{branch}/_cover.jpg"
+    return ""
+
+def repo_item(name, url, cover, date, site, fork, desc):
+    """Emit a list item: image-link + metadata HTML comment.
+    Format consumed by docsify-gitrepos.js and docsify-remote-repo.js.
     """
-    link = f'[{name}]({url})' if url else name
-    site_part = f' [site]({site})' if site else ''
-    return f'{hashes} {link}{fork} *{date}*{site_part}'
+    safe_desc = desc.replace('"', '&quot;') if desc else ""
+    meta = f'date="{date}"'
+    if site:
+        meta += f' site="{site}"'
+    if safe_desc:
+        meta += f' desc="{safe_desc}"'
+    if fork:
+        meta += ' fork'
+    return f"* [![{name}]({cover})]({url} ':repo') <!-- gr {meta} -->"
 
 if service == "github":
     repos = sorted(repos, key=lambda x: x.get("pushed_at", ""), reverse=True)
@@ -421,12 +434,9 @@ if service == "github":
         date = (r.get("pushed_at") or "")[:10] or "—"
         desc = " ".join((r.get("description") or "").split())
         site = r.get("homepage") or ""
-        fork = " *(fork)*" if r.get("fork") else ""
-        lines.append(repo_heading(hashes, name, url, date, site, fork))
-        if desc:
-            lines.append("")
-            lines.append(desc)
-        lines.append("")
+        fork = r.get("fork", False)
+        cover = cover_url(service, r)
+        lines.append(repo_item(name, url, cover, date, site, fork, desc))
 
 elif service == "gitlab":
     def pages_url(r):
@@ -440,19 +450,14 @@ elif service == "gitlab":
         date = (r.get("last_activity_at") or "")[:10] or "—"
         desc = " ".join((r.get("description") or "").split())
         site = pages_url(r)
-        fork = " *(fork)*" if r.get("forked_from_project") else ""
+        fork = bool(r.get("forked_from_project"))
         if group:
             ns = r.get("namespace") or {}
             ns_path = ns.get("full_path", "")
-            ns_url  = ns.get("web_url", "")
             if ns_path and ns_path != group:
-                ns_label = f"[{ns_path}]({ns_url})" if ns_url else ns_path
-                desc = (desc + f" — {ns_label}") if desc else ns_label
-        lines.append(repo_heading(hashes, name, url, date, site, fork))
-        if desc:
-            lines.append("")
-            lines.append(desc)
-        lines.append("")
+                desc = (desc + f" — {ns_path}") if desc else ns_path
+        cover = cover_url(service, r)
+        lines.append(repo_item(name, url, cover, date, site, fork, desc))
 
 elif service == "codeberg":
     repos = sorted(repos, key=lambda x: x.get("updated_at", ""), reverse=True)
@@ -462,12 +467,9 @@ elif service == "codeberg":
         date = (r.get("updated_at") or "")[:10] or "—"
         desc = " ".join((r.get("description") or "").split())
         site = r.get("website") or ""
-        fork = " *(fork)*" if r.get("fork") else ""
-        lines.append(repo_heading(hashes, name, url, date, site, fork))
-        if desc:
-            lines.append("")
-            lines.append(desc)
-        lines.append("")
+        fork = r.get("fork", False)
+        cover = cover_url(service, r)
+        lines.append(repo_item(name, url, cover, date, site, fork, desc))
 
 else:
     print("*Unknown service.*")
@@ -498,14 +500,13 @@ process_gitrepos_for_readme() {
         local tag_line
         tag_line="$(sed -n "${start_ln}p" "$readme_path")"
 
-        local service="" username="" group="" org="" exclude="" creator="" heading=""
+        local service="" username="" group="" org="" exclude="" creator=""
         [[ "$tag_line" =~ service=\"([^\"]+)\" ]]   && service="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ username=\"([^\"]+)\" ]]  && username="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ group=\"([^\"]+)\" ]]     && group="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ org=\"([^\"]+)\" ]]       && org="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ exclude=\"([^\"]+)\" ]]   && exclude="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ creator=\"([^\"]+)\" ]]   && creator="${BASH_REMATCH[1]}"
-        [[ "$tag_line" =~ heading=\"([^\"]+)\" ]]   && heading="${BASH_REMATCH[1]}"
 
         if [[ -z "$service" || ( -z "$username" && -z "$group" && -z "$org" ) ]]; then
             echo "  Skipping block at line $start_ln: missing service or username/group/org"
@@ -561,7 +562,7 @@ except Exception:
             cp "$result_cache" "$json_tmp"
         fi
 
-        format_repos  "$service" "$json_tmp" "$group" "$exclude" "$heading"         > "$content_tmp"
+        format_repos  "$service" "$json_tmp" "$group" "$exclude"         > "$content_tmp"
         rm -f "$json_tmp"
 
         {
