@@ -469,14 +469,13 @@ def safe_name(name):
     return re.sub(r'[^A-Za-z0-9._-]', '-', name)
 
 def existing_cover(name, cdir):
+    """Return cached path only for real covers (not nocover placeholders).
+    Nocover repos are always re-checked via the API on every run."""
     sn = safe_name(name)
     for ext in CACHED_EXTS:
-        if os.path.isfile(os.path.join(cdir, sn + ext)):
+        p = os.path.join(cdir, sn + ext)
+        if os.path.isfile(p):
             return f".covers/{sn}{ext}"
-    nocover = os.path.join(cdir, sn + "_nocover.svg")
-    retry   = os.path.join(cdir, sn + ".retry")
-    if os.path.isfile(nocover) and not os.path.isfile(retry):
-        return f".covers/{sn}_nocover.svg"
     return None
 
 def download_cover(service, r, cdir, root_files):
