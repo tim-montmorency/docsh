@@ -358,19 +358,23 @@ PYEOF
 }
 
 # ---------------------------------------------------------------------------
-# Read JSON from $2 (file path), format as repo cards (heading + icons + date
-# + description), write to stdout.
+# Read JSON from $2 (file path), format as repo cards, download cover/icon
+# images to .covers/ subfolder.  Writes markdown to stdout.
 # $4 = exclude regex (optional)   — repos matching it are dropped (safety net)
+# $5 = readme directory            — covers saved to $5/.covers/
 # ---------------------------------------------------------------------------
 format_repos() {
-    local service="$1" json_file="$2" group="${3:-}" exclude="${4:-}"
-    python3 - "$service" "$json_file" "$group" "$exclude" <<'PYEOF'
-import sys, json, re
+    local service="$1" json_file="$2" group="${3:-}" exclude="${4:-}" readme_dir="${5:-}"
+    python3 - "$service" "$json_file" "$group" "$exclude" "$readme_dir" <<'PYEOF'
+import sys, json, re, os, time, urllib.request, urllib.error
+from concurrent.futures import ThreadPoolExecutor
 
 service       = sys.argv[1]
 json_file     = sys.argv[2]
 group         = sys.argv[3] if len(sys.argv) > 3 else ""
 exclude       = sys.argv[4] if len(sys.argv) > 4 else ""
+readme_dir    = sys.argv[5] if len(sys.argv) > 5 else ""
+covers_dir    = os.path.join(readme_dir, ".covers") if readme_dir else ""
 
 try:
     with open(json_file) as f:
@@ -401,16 +405,183 @@ if not repos:
 
 lines = []
 
-def cover_url(service, r):
-    """Compute the raw cover image URL for the repo."""
+# ── Cover / icon download ────────────────────────────────────────────────
+CANDIDATE_SET = {
+    '_cover.jpg', '_cover.webp', '_cover.png',
+    'icon.webp', 'icon.svg', 'icon.jpg', 'icon.png',
+}
+# Priority order: prefer cover over icon, prefer jpg/webp over png/svg
+CANDIDATE_PRIORITY = [
+    '_cover.jpg', '_cover.webp', '_cover.png',
+    'icon.webp', 'icon.svg', 'icon.jpg', 'icon.png',
+]
+CACHED_EXTS = ('.jpg', '.webp', '.png', '.svg')
+
+_gh_headers = {"User-Agent": "docsh/1.0", "Accept": "application/vnd.github.v3+json"}
+_gh_token = os.environ.get("GITHUB_TOKEN", "")
+if _gh_token:
+    _gh_headers["Authorization"] = f"token {_gh_token}"
+
+def list_root_files(service, r):
+    """Use the service API to list files in the repo root.  Returns a set of
+    filenames, or None on error (caller falls back to blind probing)."""
+    try:
+        if service == "github":
+            url = f"https://api.github.com/repos/{r.get('full_name','')}/contents/"
+            req = urllib.request.Request(url, headers=_gh_headers)
+        elif service == "gitlab":
+            pid = r.get("id", "")
+            url = f"https://gitlab.com/api/v4/projects/{pid}/repository/tree?per_page=100"
+            req = urllib.request.Request(url, headers={"User-Agent": "docsh/1.0"})
+        elif service == "codeberg":
+            url = f"https://codeberg.org/api/v1/repos/{r.get('full_name','')}/contents/"
+            req = urllib.request.Request(url, headers={"User-Agent": "docsh/1.0"})
+        else:
+            return None
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            items = json.load(resp)
+        return {
+            item.get("name") or item.get("path", "").split("/")[-1]
+            for item in items if isinstance(item, dict)
+        }
+    except Exception:
+        return None
+
+def raw_base(service, r):
     if service == "github":
-        return f"https://raw.githubusercontent.com/{r.get('full_name', '')}/HEAD/_cover.jpg"
+        return f"https://raw.githubusercontent.com/{r.get('full_name', '')}/HEAD/"
     elif service == "gitlab":
-        return f"https://gitlab.com/{r.get('path_with_namespace', '')}/-/raw/HEAD/_cover.jpg"
+        return f"https://gitlab.com/{r.get('path_with_namespace', '')}/-/raw/HEAD/"
     elif service == "codeberg":
         branch = r.get("default_branch", "main") or "main"
-        return f"https://codeberg.org/{r.get('full_name', '')}/raw/branch/{branch}/_cover.jpg"
+        return f"https://codeberg.org/{r.get('full_name', '')}/raw/branch/{branch}/"
     return ""
+
+def nocover_svg(name):
+    d = name[:30] + ('\u2026' if len(name) > 30 else '')
+    d = d.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180">'
+            f'<rect width="320" height="180" fill="#2a2a3a" rx="4"/>'
+            f'<text x="160" y="95" text-anchor="middle" fill="#8b8acb" '
+            f'font-size="14" font-family="sans-serif">{d}</text></svg>')
+
+def safe_name(name):
+    return re.sub(r'[^A-Za-z0-9._-]', '-', name)
+
+def existing_cover(name, cdir):
+    sn = safe_name(name)
+    for ext in CACHED_EXTS:
+        if os.path.isfile(os.path.join(cdir, sn + ext)):
+            return f".covers/{sn}{ext}"
+    nocover = os.path.join(cdir, sn + "_nocover.svg")
+    retry   = os.path.join(cdir, sn + ".retry")
+    if os.path.isfile(nocover) and not os.path.isfile(retry):
+        return f".covers/{sn}_nocover.svg"
+    return None
+
+def download_cover(service, r, cdir, root_files):
+    """Download the best cover/icon image for a repo.
+    root_files: set of filenames in repo root (from list_root_files),
+                or None to fall back to blind probing."""
+    name = r.get("name", "")
+    if not name or not cdir:
+        return ""
+    sn = safe_name(name)
+    cached = existing_cover(name, cdir)
+    if cached:
+        return cached
+
+    # Determine which candidate to download
+    target = None
+    if root_files is not None:
+        hits = CANDIDATE_SET & root_files
+        if hits:
+            for c in CANDIDATE_PRIORITY:
+                if c in hits:
+                    target = c
+                    break
+        if not target:
+            # API confirmed: no cover/icon exists
+            dest = os.path.join(cdir, sn + "_nocover.svg")
+            with open(dest, 'w') as f:
+                f.write(nocover_svg(name))
+            sys.stderr.write(f"    . {name} (no cover)\n")
+            retry = os.path.join(cdir, sn + ".retry")
+            if os.path.isfile(retry):
+                os.remove(retry)
+            return f".covers/{sn}_nocover.svg"
+
+    base = raw_base(service, r)
+    candidates = [target] if target else CANDIDATE_PRIORITY
+
+    all_404 = True
+    for candidate in candidates:
+        url = base + candidate
+        ext = os.path.splitext(candidate)[1]
+        dest = os.path.join(cdir, sn + ext)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "docsh/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = resp.read()
+                if data:
+                    with open(dest, 'wb') as f:
+                        f.write(data)
+                    sys.stderr.write(f"    + {name} <- {candidate}\n")
+                    retry = os.path.join(cdir, sn + ".retry")
+                    if os.path.isfile(retry):
+                        os.remove(retry)
+                    return f".covers/{sn}{ext}"
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait = min(int(e.headers.get('Retry-After', '30') or '30'), 90)
+                sys.stderr.write(f"    ~ {name}: rate limited, wait {wait}s\n")
+                time.sleep(wait + 1)
+                all_404 = False
+                break
+            if e.code != 404:
+                all_404 = False
+        except Exception:
+            all_404 = False
+            continue
+
+    dest = os.path.join(cdir, sn + "_nocover.svg")
+    with open(dest, 'w') as f:
+        f.write(nocover_svg(name))
+    if all_404:
+        sys.stderr.write(f"    . {name} (no cover)\n")
+        retry = os.path.join(cdir, sn + ".retry")
+        if os.path.isfile(retry):
+            os.remove(retry)
+    else:
+        open(os.path.join(cdir, sn + ".retry"), 'w').close()
+        sys.stderr.write(f"    ! {name} (retry later)\n")
+    return f".covers/{sn}_nocover.svg"
+
+cover_map = {}
+if covers_dir:
+    os.makedirs(covers_dir, exist_ok=True)
+
+    # Phase 1: list root files for all repos (parallel) — 1 API call each
+    sys.stderr.write(f"  Listing root files ({len(repos)} repos)...\n")
+    file_lists = {}
+    def _list(r):
+        n = r.get("name", "")
+        if existing_cover(n, covers_dir):
+            return  # already cached, skip API call
+        file_lists[n] = list_root_files(service, r)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(_list, repos))
+
+    # Phase 2: download only confirmed covers (parallel)
+    need_dl = [r for r in repos if not existing_cover(r.get("name",""), covers_dir)]
+    if need_dl:
+        sys.stderr.write(f"  Downloading covers ({len(need_dl)} new)...\n")
+    def _dl(r):
+        n = r.get("name", "")
+        root = file_lists.get(n)
+        cover_map[n] = download_cover(service, r, covers_dir, root)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(_dl, repos))
 
 def repo_item(name, url, cover, date, site, fork, desc):
     """Emit a list item: image-link + metadata HTML comment.
@@ -435,7 +606,7 @@ if service == "github":
         desc = " ".join((r.get("description") or "").split())
         site = r.get("homepage") or ""
         fork = r.get("fork", False)
-        cover = cover_url(service, r)
+        cover = cover_map.get(name, "")
         lines.append(repo_item(name, url, cover, date, site, fork, desc))
 
 elif service == "gitlab":
@@ -456,7 +627,7 @@ elif service == "gitlab":
             ns_path = ns.get("full_path", "")
             if ns_path and ns_path != group:
                 desc = (desc + f" — {ns_path}") if desc else ns_path
-        cover = cover_url(service, r)
+        cover = cover_map.get(name, "")
         lines.append(repo_item(name, url, cover, date, site, fork, desc))
 
 elif service == "codeberg":
@@ -468,7 +639,7 @@ elif service == "codeberg":
         desc = " ".join((r.get("description") or "").split())
         site = r.get("website") or ""
         fork = r.get("fork", False)
-        cover = cover_url(service, r)
+        cover = cover_map.get(name, "")
         lines.append(repo_item(name, url, cover, date, site, fork, desc))
 
 else:
@@ -562,7 +733,7 @@ except Exception:
             cp "$result_cache" "$json_tmp"
         fi
 
-        format_repos  "$service" "$json_tmp" "$group" "$exclude"         > "$content_tmp"
+        format_repos  "$service" "$json_tmp" "$group" "$exclude" "$readme_dir" > "$content_tmp"
         rm -f "$json_tmp"
 
         {
