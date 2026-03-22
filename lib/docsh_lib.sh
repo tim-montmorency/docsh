@@ -106,6 +106,12 @@ replace_between_tags() {
     sed -n "1,${start_line}p" "$file" >  "$tmp"
     printf "%s\n" "$new_content"       >> "$tmp"
     sed -n "${end_line},\$p"  "$file"  >> "$tmp"
+
+    if cmp -s "$tmp" "$file"; then
+        echo "  Unchanged: ${file#${REPO_ROOT}/}"
+        rm -f "$tmp"
+        return 0
+    fi
     mv "$tmp" "$file"
 
     echo "  Updated: ${file#${REPO_ROOT}/}"
