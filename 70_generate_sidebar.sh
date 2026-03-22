@@ -202,6 +202,17 @@ legacy_generate() {
 
 echo "Generating sidebar content…"
 
+# Build -not -path exclusions for every git submodule path so that
+# _sidebar.md files belonging to submodules are never touched when this
+# script is run from a parent repository.
+SUBMODULE_EXCLUDES=()
+if [[ -f "$REPO_ROOT/.gitmodules" ]]; then
+    while IFS= read -r sm_path; do
+        [[ -n "$sm_path" ]] && SUBMODULE_EXCLUDES+=(-not -path "${REPO_ROOT}/${sm_path}/*")
+    done < <(git -C "$REPO_ROOT" config --file "$REPO_ROOT/.gitmodules" \
+                 --get-regexp '^submodule\..*\.path$' | awk '{print $2}')
+fi
+
 while IFS= read -r sidebar; do
     if grep -q "<!-- start-replace-sidebar" "$sidebar" 2>/dev/null; then
         echo "Processing: ${sidebar#${REPO_ROOT}/}"
@@ -215,6 +226,7 @@ done < <(find "$REPO_ROOT" -name "_sidebar.md" \
     -not -path "*/docsh/*"        \
     -not -path "*/vendor/*"       \
     -not -path "*/_site/*"        \
-    -not -path "*/node_modules/*")
+    -not -path "*/node_modules/*" \
+    "${SUBMODULE_EXCLUDES[@]}")
 
 echo "Sidebar generation complete."
