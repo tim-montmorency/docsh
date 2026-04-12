@@ -16,6 +16,7 @@
 #   username  —         user account repos (github/gitlab/codeberg)
 #   org       —         GitHub organisation repos (replaces username)
 #   group     —         GitLab group path
+#   subgroup  —         GitLab subgroup within group (combined as group/subgroup)
 #   exclude   —         Python regex; repos whose name matches are hidden
 #                       e.g. exclude="^(c[0-9]-|momo_modele)" to skip student repos
 #
@@ -289,9 +290,11 @@ PYEOF
             ;;
         gitlab)
             if [[ -n "$group" ]]; then
-                # Group (+ all subgroups) mode
+                # Group (+ all subgroups) mode — URL-encode the group path
+                # so nested subgroups (e.g. sr-expo/artwork) work correctly.
+                local encoded_group="${group//\//%2F}"
                 fetch_gitlab_paginated \
-                    "https://gitlab.com/api/v4/groups/${group}/projects?include_subgroups=true&order_by=last_activity_at&sort=desc&per_page=100&visibility=public"
+                    "https://gitlab.com/api/v4/groups/${encoded_group}/projects?include_subgroups=true&order_by=last_activity_at&sort=desc&per_page=100&visibility=public"
             else
                 # User repos mode — resolve numeric ID first
                 local uid
@@ -670,13 +673,19 @@ process_gitrepos_for_readme() {
         local tag_line
         tag_line="$(sed -n "${start_ln}p" "$readme_path")"
 
-        local service="" username="" group="" org="" exclude="" creator=""
+        local service="" username="" group="" org="" exclude="" creator="" subgroup=""
         [[ "$tag_line" =~ service=\"([^\"]+)\" ]]   && service="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ username=\"([^\"]+)\" ]]  && username="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ group=\"([^\"]+)\" ]]     && group="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ org=\"([^\"]+)\" ]]       && org="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ exclude=\"([^\"]+)\" ]]   && exclude="${BASH_REMATCH[1]}"
         [[ "$tag_line" =~ creator=\"([^\"]+)\" ]]   && creator="${BASH_REMATCH[1]}"
+        [[ "$tag_line" =~ subgroup=\"([^\"]+)\" ]]  && subgroup="${BASH_REMATCH[1]}"
+
+        # Combine group + subgroup into a single group path
+        if [[ -n "$subgroup" && -n "$group" ]]; then
+            group="${group}/${subgroup}"
+        fi
 
         if [[ -z "$service" || ( -z "$username" && -z "$group" && -z "$org" ) ]]; then
             echo "  Skipping block at line $start_ln: missing service or username/group/org"
@@ -713,8 +722,10 @@ process_gitrepos_for_readme() {
 
         # Result cache: save on success; restore on empty/failed fetch so we never
         # show "*No public repositories found.*" due to a transient API failure.
+        local cache_key="${org:-${group:-${username:-unknown}}}"
+        cache_key="${cache_key//\//-}"
         local result_cache
-        result_cache="${readme_dir}/.gitrepos-result-${service}-${org:-${group:-${username:-unknown}}}.json"
+        result_cache="${readme_dir}/.gitrepos-result-${service}-${cache_key}.json"
         local _is_empty
         _is_empty=$(python3 -c "
 import json, sys
