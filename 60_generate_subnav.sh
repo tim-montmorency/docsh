@@ -71,8 +71,13 @@ generate_subnav_content() {
                 continue
             fi
 
+            # Skip directories with .docshignore marker
+            [[ -f "$subdir/.docshignore" ]] && continue
+
             local subdir_readme="$subdir/README.md"
             if [[ -f "$subdir_readme" ]]; then
+                # Skip entries excluded by frontmatter
+                should_skip "$subdir_readme" && continue
                 local subdir_title
                 subdir_title=$(get_title "$subdir_readme")
                 [[ -z "$subdir_title" ]] && subdir_title="$base_dir"
@@ -211,6 +216,8 @@ generate_subnav() {
                     break
                 fi
             done
+            # Skip directories with .docshignore marker
+            [[ -f "$subdir/.docshignore" ]] && is_excluded=1
             if [[ $is_excluded -eq 0 ]]; then
                 generate_subnav "$subdir"
             fi
